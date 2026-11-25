@@ -41,7 +41,7 @@
 <body>
 
 <h1>VOLTCORE v7.0.7 — Tests E2E v2</h1>
-<div class="sub">289 tests · 21 catégories · timeout · skip · rapport 3 formats</div>
+<div class="sub">295 tests · 21 catégories · timeout · skip · rapport 3 formats</div>
 
 <div id="summary">⏳ Chargement…</div>
 <div id="results"></div>
@@ -136,7 +136,7 @@
 <!-- Modules 00 → 28 (PAS 29/30) -->
 <script src="./00-core.js"></script>
 <script src="./01-utils.js"></script>
-<script src="./02-store.js"></script>
+<script src="./02-store.js?v=20261125-ia7"></script>
 <script src="./03-idb.js"></script>
 <script src="./04-alerts.js"></script>
 <script src="./05-auth.js"></script>
@@ -156,7 +156,7 @@
 <script src="./19-scan-cv.js"></script>
 <script src="./20-scan-js.js"></script>
 <script src="./21-sign.js"></script>
-<script src="./22-ia.js"></script>
+<script src="./22-ia.js?v=20261125-ia7"></script>
 <script src="./23-dash.js"></script>
 <script src="./24-mobile.js"></script>
 <script src="./25-tools.js"></script>
@@ -1613,6 +1613,57 @@
       lignes: [{ designation: 'Y', quantite: 1, prixUnitaire: 10 }]
     });
     return r.ok === true;
+  });
+
+  add('T. IA', 'anomalies quantite/prix détectées', function () {
+    var r = VC.AssistantIA.validateParsedResult({
+      fournisseur: 'X',
+      date: 'invalide',
+      lignes: [
+        { designation: 'Y', quantite: -1, prixUnitaire: -5 },
+        { designation: 'Z', quantite: 1, prixUnitaire: 10 }
+      ]
+    });
+    return r.ok === true && r.data.warnings.length >= 3;
+  });
+
+  add('T. IA', 'confiance absente = 50%', function () {
+    var r = VC.AssistantIA.validateParsedResult({
+      fournisseur: 'X',
+      lignes: [{ designation: 'Y', quantite: 1, prixUnitaire: 10 }]
+    });
+    return r.ok && r.data.confiance === 50;
+  });
+
+  add('T. IA', 'hypothèses structurées conservées', function () {
+    var r = VC.AssistantIA.validateParsedResult({
+      fournisseur: 'X',
+      hypotheses: ['surface estimée', '10% de perte'],
+      confiance: 72,
+      lignes: [{ designation: 'Y', quantite: 1, prixUnitaire: 10 }]
+    });
+    return r.ok && r.data.confiance === 72 && r.data.hypotheses.length === 2;
+  });
+
+  add('T. IA', 'normalisation universelle sans écriture', function () {
+    if (!VC.AssistantIA.normalizeUniversalPreview) return false;
+    var before = S.getAll('articles').length;
+    var preview = VC.AssistantIA.normalizeUniversalPreview({
+      articles: [{ nom: 'IA_PREVIEW_TEST', prix: '12,5' }]
+    });
+    var after = S.getAll('articles').length;
+    return after === before && preview.articles.length === 1;
+  });
+
+  add('T. IA', 'réservation numéro achat atomique', function () {
+    if (typeof S.reserveNumero !== 'function') return false;
+    var promise = S.reserveNumero('achat');
+    return !!promise && typeof promise.then === 'function';
+  });
+
+  add('T. IA', 'aperçu document disponible sans écriture directe', function () {
+    return typeof VC.AssistantIA.generateDocumentFromJSON === 'function' &&
+      typeof VC.AssistantIA.confirmDocumentPreview === 'function';
   });
 
   /* ═══════════════════════════════════════════════════════════

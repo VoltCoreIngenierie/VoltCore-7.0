@@ -59,6 +59,9 @@
   var _parsedResult = null;
   var _previewMatches = [];
   var _importing = false;
+  var _iaPreviewAction = 'purchase';
+  var _universalPreview = null;
+  var _documentPreview = null;
 
   /* ═══════════════════════════════════════════════════════════
      SECTION 2 — PROMPTS
@@ -323,6 +326,7 @@
       return { ok: false, error: 'aucune ligne' };
     }
 
+    var warnings = [];
     var cleanLines = [];
     for (var i = 0; i < parsed.lignes.length; i++) {
       var l = parsed.lignes[i];
@@ -333,6 +337,9 @@
 
       var q = U.parseNumber(l.quantite);
       var p = U.parseNumber(l.prixUnitaire);
+      if (q <= 0) warnings.push('Ligne ' + (i + 1) + ' : quantité <= 0 (' + q + ').');
+      if (p < 0) warnings.push('Ligne ' + (i + 1) + ' : prix négatif (' + U.formatMoney(p) + ').');
+      if (p > VC.MAX_DOC_PU) warnings.push('Ligne ' + (i + 1) + ' : prix suspect (' + U.formatMoney(p) + ').');
       if (q <= 0 || p < 0) continue;
 
       cleanLines.push({
@@ -350,13 +357,24 @@
 
     var dateStr = String(parsed.date || '').slice(0, 10);
     var validDate = U.isValidDateString(dateStr) ? dateStr : U.todayISO();
+    if (!U.isValidDateString(dateStr)) {
+      warnings.push('Date invalide ou absente : "' + dateStr + '". Date locale utilisée.');
+    }
 
     var tvaRate = U.parseNumber(parsed.tvaRate);
-    if (!isFinite(tvaRate) || tvaRate < 0) tvaRate = VC.TVA_DEFAULT;
-    if (tvaRate > 100) tvaRate = 100;
+    if (!isFinite(tvaRate) || tvaRate < 0) {
+      warnings.push('TVA invalide : valeur remise à ' + VC.TVA_DEFAULT + '%.');
+      tvaRate = VC.TVA_DEFAULT;
+    } else if (tvaRate > 100) {
+      warnings.push('TVA supérieure à 100% : valeur ramenée à 100%.');
+      tvaRate = 100;
+    }
 
     var timbre = U.parseNumber(parsed.timbre);
-    if (!isFinite(timbre) || timbre < 0) timbre = 0;
+    if (!isFinite(timbre) || timbre < 0) {
+      warnings.push('Timbre invalide : valeur remise à 0 DT.');
+      timbre = 0;
+    }
 
     return {
       ok: true,
@@ -367,7 +385,15 @@
         date: validDate,
         tvaRate: tvaRate,
         timbre: timbre,
-        lignes: cleanLines
+        lignes: cleanLines,
+        warnings: warnings,
+        analyseTechnique: String(parsed.analyse_technique || '').trim(),
+        hypotheses: Array.isArray(parsed.hypotheses)
+          ? parsed.hypotheses.map(function (h) { return String(h || '').trim(); }).filter(function (h) { return !!h; })
+          : [],
+        confiance: parsed.confiance == null
+          ? 50
+          : U.clamp(U.parseNumber(parsed.confiance), 0, 100)
       }
     };
   };
@@ -565,6 +591,7 @@
 
   IA.openPreview = function () {
     if (!_parsedResult) return;
+    _iaPreviewAction = 'purchase';
     _computePreviewMatches();
     _renderPreview();
     U.showFlex('iaPreviewModal');
@@ -574,6 +601,9 @@
     U.hide('iaPreviewModal');
     _parsedResult = null;
     _previewMatches = [];
+    _universalPreview = null;
+    _documentPreview = null;
+    _iaPreviewAction = 'purchase';
   };
 
   function _computePreviewMatches() {
@@ -707,11 +737,33 @@
       // FIX R-NEW : avertir sur le prix de vente par défaut
       html += '<div style="margin-top:8px;padding:8px 10px;background:#fef3c7;' +
         'border-left:3px solid #d97706;border-radius:4px;font-size:11px">' +
-        '<strong>⚠ Prix de vente par défaut :</strong> les articles seront ' +
-        'créés avec <strong>prix = prix d\'achat × 1.30</strong> (marge 30%). ' +
-        'Tu pourras ajuster dans Stock après l\'import.</div>';
+        '<strong>Prix de vente proposé :</strong> marge actuelle ' +
+        '<input id="iaSaleMargin" type="number" min="-100" max="1000" value="30" style="width:80px" aria-label="Marge de vente en pourcentage"> %' +
+        ' sur le prix d\'achat. Cette marge reste modifiable avant confirmation.</div>';
     }
     html += '</div>';
+
+    if (d.warnings && d.warnings.length > 0) {
+      html += '<div class="ia-preview-block"><h4>⚠ Anomalies détectées</h4>';
+      html += '<ul style="margin:6px 0;padding-left:18px">';
+      for (var wi = 0; wi < d.warnings.length; wi++) {
+        html += '<li>' + U.escapeHtml(d.warnings[wi]) + '</li>';
+      }
+      html += '</ul></div>';
+    }
+
+    if (d.analyseTechnique || d.hypotheses.length > 0) {
+      html += '<div class="ia-preview-block"><h4>Hypothèses IA · confiance ' + d.confiance + '%</h4>';
+      if (d.analyseTechnique) html += '<p>' + U.escapeHtml(d.analyseTechnique) + '</p>';
+      if (d.hypotheses.length > 0) {
+        html += '<ul style="margin:6px 0;padding-left:18px">';
+        for (var hi = 0; hi < d.hypotheses.length; hi++) {
+          html += '<li>' + U.escapeHtml(d.hypotheses[hi]) + '</li>';
+        }
+        html += '</ul>';
+      }
+      html += '</div>';
+    }
 
     /* Totaux */
     html += '<div class="ia-preview-block"><h4>Totaux recalculés</h4>';
@@ -740,7 +792,7 @@
     });
   }
 
-  function _createArticleQuick(designation, prixUnitaire) {
+  function _createArticleQuick(designation, prixUnitaire, marginPct) {
     var nom = String(designation || '').trim();
     if (!nom) return null;
 
@@ -748,7 +800,10 @@
     // Avant : prix = 0 → marge -100% → alerte dashboard + vente à 0 DT
     // Après : Anis peut ajuster dans Stock, mais l'article est cohérent
     var pa = U.parseNumber(prixUnitaire);
-    var pv = pa > 0 ? Math.round(pa * 1.30 * 1000) / 1000 : 0;
+    var margin = U.parseNumber(marginPct);
+    if (!isFinite(margin)) margin = 30;
+    margin = U.clamp(margin, -100, 1000);
+    var pv = pa > 0 ? Math.round(pa * (1 + margin / 100) * 1000) / 1000 : 0;
 
     return S.save('articles', {
       nom: nom,
@@ -762,7 +817,7 @@
       codeBarre: '',
       hs: false,
       actif: true,
-      notes: 'Créé automatiquement par import IA (prix vente = +30% par défaut — à vérifier)'
+      notes: 'Créé automatiquement par import IA (marge vente = ' + margin + '% — à vérifier)'
     });
   }
 
@@ -771,12 +826,27 @@
     _importing = true;
 
     try {
+      if (_iaPreviewAction === 'universal') {
+        _importing = false;
+        return IA.confirmUniversalPreview();
+      }
+      if (_iaPreviewAction === 'document') {
+        _importing = false;
+        return IA.confirmDocumentPreview();
+      }
       if (!_parsedResult) {
         U.toast('Aucun aperçu à confirmer.', 'error');
         return;
       }
 
       var d = _parsedResult;
+      if (d.warnings && d.warnings.length > 0) {
+        if (!VC.Auth || !VC.Auth.confirmAdminException ||
+            !VC.Auth.confirmAdminException(d.warnings.join('\n'))) {
+          U.toast('Import annulé après anomalie détectée.', 'warning', 4000);
+          return;
+        }
+      }
 
       /* 1. Fournisseur */
       var supMatch = _matchSupplier(d.fournisseur, d.fournisseurMF);
@@ -799,6 +869,10 @@
       var cb = document.getElementById('iaAutoCreateArticles');
       if (cb) autoCreate = !!cb.checked;
 
+      var marginInput = document.getElementById('iaSaleMargin');
+      var marginPct = marginInput ? U.parseNumber(marginInput.value) : 30;
+      marginPct = U.clamp(marginPct, -100, 1000);
+
       var finalLines = [];
       for (var i = 0; i < d.lignes.length; i++) {
         var l = d.lignes[i];
@@ -807,7 +881,7 @@
         var designation = match.isMatch ? match.nom : l.designation;
 
         if (!articleId && autoCreate) {
-          var newArt = _createArticleQuick(designation, l.prixUnitaire);
+          var newArt = _createArticleQuick(designation, l.prixUnitaire, marginPct);
           if (newArt) {
             articleId = newArt.id;
             designation = newArt.nom;
@@ -830,59 +904,67 @@
         : { totalHT: 0, tvaRate: d.tvaRate, tva: 0, timbre: d.timbre,
             totalTTC: 0, total: 0 };
 
-      /* 4. Facture d'achat */
-      var year = new Date().getFullYear();
-      var docNumero = d.numeroFacture ||
-        ('ACH-' + year + '-' +
-         String(S.getAll('purchaseInvoices').length + 1).padStart(4, '0'));
+      /* 4. Facture d'achat avec numéro réservé */
+      var reservePromise = d.numeroFacture
+        ? Promise.resolve(d.numeroFacture)
+        : (S.reserveNumero
+            ? S.reserveNumero('achat')
+            : Promise.resolve('ACH-' + new Date().getFullYear() + '-' +
+                String(S.getAll('purchaseInvoices').length + 1).padStart(4, '0')));
 
-      var doc = {
-        numero: docNumero,
-        refFacture: d.numeroFacture || '',
-        supplierId: supplierId,
-        fournisseurId: supplierId,
-        fournisseur: supplierName,
-        date: d.date,
-        chantierId: '',
-        tvaRate: totals.tvaRate,
-        timbre: totals.timbre,
-        notes: 'Importé via Assistant IA le ' + U.todayISO(),
-        lines: finalLines,
-        totals: totals,
-        totalTTC: totals.totalTTC,
-        total: totals.totalTTC,
-        paiements: [],
-        source: 'ia'
-      };
+      return reservePromise.then(function (docNumero) {
+        var doc = {
+          numero: docNumero,
+          refFacture: d.numeroFacture || docNumero,
+          supplierId: supplierId,
+          fournisseurId: supplierId,
+          fournisseur: supplierName,
+          date: d.date,
+          chantierId: '',
+          tvaRate: totals.tvaRate,
+          timbre: totals.timbre,
+          notes: 'Importé via Assistant IA le ' + U.todayISO(),
+          lines: finalLines,
+          totals: totals,
+          totalTTC: totals.totalTTC,
+          total: totals.totalTTC,
+          paiements: [],
+          source: 'ia'
+        };
 
-      var saved = S.save('purchaseInvoices', doc);
-      if (!saved) {
-        throw new Error('Enregistrement facture échoué');
-      }
+        if (!S.save('purchaseInvoices', doc)) {
+          throw new Error('Enregistrement facture échoué');
+        }
 
-      /* 5. Alimente comparateur de prix */
-      if (VC.Stock && typeof VC.Stock.recordExternalPrice === 'function') {
-        for (var k = 0; k < finalLines.length; k++) {
-          var fl = finalLines[k];
-          if (fl.articleId && fl.prixUnitaire > 0) {
-            try {
-              VC.Stock.recordExternalPrice(
-                fl.articleId, fl.prixUnitaire, supplierName,
-                doc.numero, d.date
-              );
-            } catch (e) {
-              VC.logError('22-ia', 'recordExternalPrice échoué', e);
+        /* 5. Alimente comparateur de prix */
+        if (VC.Stock && typeof VC.Stock.recordExternalPrice === 'function') {
+          for (var k = 0; k < finalLines.length; k++) {
+            var fl = finalLines[k];
+            if (fl.articleId && fl.prixUnitaire > 0) {
+              try {
+                VC.Stock.recordExternalPrice(
+                  fl.articleId, fl.prixUnitaire, supplierName,
+                  doc.numero, d.date
+                );
+              } catch (e) {
+                VC.logError('22-ia', 'recordExternalPrice échoué', e);
+              }
             }
           }
         }
-      }
 
-      /* 6. Refresh */
-      IA.closePreview();
-      IA.close();
-
-      U.toast('Import réussi : ' + docNumero + ' · ' +
-        finalLines.length + ' ligne(s)', 'success', 4000);
+        IA.closePreview();
+        IA.close();
+        U.toast('Import réussi : ' + docNumero + ' · ' +
+          finalLines.length + ' ligne(s)', 'success', 4000);
+        _importing = false;
+        return true;
+      }).catch(function (e) {
+        VC.logError('22-ia', 'confirmImport achat échoué', e);
+        U.toast('Erreur d\'import : ' + (e.message || ''), 'error', 5000);
+        _importing = false;
+        return false;
+      });
 
     } catch (e) {
       VC.logError('22-ia', 'confirmImport échoué', e);
@@ -898,6 +980,112 @@
   /**
    * FIX BLOC C : Importation universelle (Clients, Fournisseurs, Articles)
    */
+  function _normalizeUniversalPreview(parsed) {
+    var out = { clients: [], suppliers: [], articles: [], chantiers: [], warnings: [] };
+    var collections = [
+      ['clients', 'clients'],
+      ['fournisseurs', 'suppliers'],
+      ['articles', 'articles'],
+      ['chantiers', 'chantiers']
+    ];
+
+    for (var c = 0; c < collections.length; c++) {
+      var key = collections[c][0];
+      var storeName = collections[c][1];
+      var source = parsed[key];
+      if (!Array.isArray(source)) continue;
+
+      for (var i = 0; i < source.length; i++) {
+        var raw = source[i];
+        if (!raw || typeof raw !== 'object') continue;
+        var name = String(raw.nom || '').trim();
+        if (!name) {
+          out.warnings.push(key + ' ligne ' + (i + 1) + ' : nom vide ignoré.');
+          continue;
+        }
+
+        var item = S.normalize(storeName, raw);
+        if (!item) {
+          out.warnings.push(key + ' ligne ' + (i + 1) + ' : données invalides ignorées.');
+          continue;
+        }
+        if (storeName === 'articles') {
+          var type = String(raw.type || '').toLowerCase();
+          if (type === 'main_oeuvre' || type === 'service') item.hs = true;
+        }
+        out[key === 'fournisseurs' ? 'suppliers' : key].push(item);
+      }
+    }
+
+    return out;
+  }
+
+  function _showUniversalPreview(parsed) {
+    var preview = _normalizeUniversalPreview(parsed);
+    if (!preview.clients.length && !preview.suppliers.length &&
+        !preview.articles.length && !preview.chantiers.length) {
+      U.toast('Aucune donnée valide à importer.', 'error', 4000);
+      return false;
+    }
+
+    _universalPreview = preview;
+    _iaPreviewAction = 'universal';
+
+    var html = '<div class="ia-preview-block"><h4>Import universel IA</h4>';
+    html += '<div>Clients : <strong>' + preview.clients.length + '</strong></div>';
+    html += '<div>Fournisseurs : <strong>' + preview.suppliers.length + '</strong></div>';
+    html += '<div>Articles : <strong>' + preview.articles.length + '</strong></div>';
+    html += '<div>Chantiers : <strong>' + preview.chantiers.length + '</strong></div>';
+    html += '</div>';
+
+    if (preview.warnings.length > 0) {
+      html += '<div class="ia-preview-block"><h4>⚠ Éléments ignorés</h4><ul style="margin:6px 0;padding-left:18px">';
+      for (var i = 0; i < preview.warnings.length; i++) {
+        html += '<li>' + U.escapeHtml(preview.warnings[i]) + '</li>';
+      }
+      html += '</ul></div>';
+    }
+
+    html += '<div class="ia-preview-block"><p class="muted">Les lignes sont validées et normalisées. Toute écriture reste soumise à confirmation.</p></div>';
+    document.getElementById('iaPreviewBody').innerHTML = html;
+    U.showFlex('iaPreviewModal');
+    return true;
+  }
+
+  IA.normalizeUniversalPreview = _normalizeUniversalPreview;
+
+  IA.confirmUniversalPreview = function () {
+    if (!VC.Auth || !VC.Auth.isAdmin()) {
+      U.toast('Import universel réservé aux administrateurs.', 'warning', 4000);
+      return false;
+    }
+    if (!_universalPreview) return false;
+
+    var preview = _universalPreview;
+    var count = { clients: 0, suppliers: 0, articles: 0, chantiers: 0 };
+
+    for (var i = 0; i < preview.clients.length; i++) {
+      if (S.save('clients', preview.clients[i])) count.clients++;
+    }
+    for (var j = 0; j < preview.suppliers.length; j++) {
+      if (S.save('suppliers', preview.suppliers[j])) count.suppliers++;
+    }
+    for (var k = 0; k < preview.articles.length; k++) {
+      if (S.save('articles', preview.articles[k])) count.articles++;
+    }
+    for (var l = 0; l < preview.chantiers.length; l++) {
+      if (S.save('chantiers', preview.chantiers[l])) count.chantiers++;
+    }
+
+    IA.closePreview();
+    IA.close();
+    U.toast('Import terminé : ' + count.clients + ' client(s), ' +
+      count.suppliers + ' fournisseur(s), ' + count.articles + ' article(s), ' +
+      count.chantiers + ' chantier(s).', 'success', 5000);
+    if (typeof VC.refreshAllUI === 'function') VC.refreshAllUI();
+    return true;
+  };
+
   IA.importUniversalData = function () {
     var textarea = document.getElementById('iaPasteTextarea');
     var text = textarea ? textarea.value : '';
@@ -913,64 +1101,7 @@
       return;
     }
 
-    var count = { clients: 0, fournisseurs: 0, articles: 0, chantiers: 0 };
-
-    // 1. Import Clients
-    if (Array.isArray(parsed.clients)) {
-      for (var i = 0; i < parsed.clients.length; i++) {
-        var c = parsed.clients[i];
-        if (c.nom) {
-          if (VC.Store.save('clients', c)) count.clients++;
-        }
-      }
-    }
-
-    // 2. Import Fournisseurs
-    if (Array.isArray(parsed.fournisseurs)) {
-      for (var j = 0; j < parsed.fournisseurs.length; j++) {
-        var f = parsed.fournisseurs[j];
-        if (f.nom) {
-          if (VC.Store.save('suppliers', f)) count.fournisseurs++;
-        }
-      }
-    }
-
-    // 3. Import Articles (avec distinction hs:true pour main d'oeuvre)
-    if (Array.isArray(parsed.articles)) {
-      for (var k = 0; k < parsed.articles.length; k++) {
-        var a = parsed.articles[k];
-        if (a.nom) {
-          // Si type = "main_oeuvre" ou "service", on force hs=true
-          if (a.type === 'main_oeuvre' || a.type === 'service') {
-            a.hs = true;
-          }
-          if (VC.Store.save('articles', a)) count.articles++;
-        }
-      }
-    }
-
-    // 4. Import Chantiers
-    if (Array.isArray(parsed.chantiers)) {
-      for (var l = 0; l < parsed.chantiers.length; l++) {
-        var ch = parsed.chantiers[l];
-        if (ch.nom) {
-          if (VC.Store.save('chantiers', ch)) count.chantiers++;
-        }
-      }
-    }
-
-    var msg = 'Import terminé : ' + count.clients + ' client(s), ' + 
-              count.fournisseurs + ' fournisseur(s), ' + 
-              count.articles + ' article(s), ' + 
-              count.chantiers + ' chantier(s).';
-
-    U.toast(msg, 'success', 5000);
-    
-    // Nettoyer la zone
-    textarea.value = '';
-    
-    // Rafraîchir l'interface globale
-    if (typeof VC.refreshAllUI === 'function') VC.refreshAllUI();
+    _showUniversalPreview(parsed);
   };
     /**
    * FIX BLOC C : Bouton Magique
@@ -991,12 +1122,87 @@
       return;
     }
 
+    var warnings = [];
+    var lines = [];
+    for (var i = 0; i < parsed.document.lignes.length; i++) {
+      var l = parsed.document.lignes[i] || {};
+      var designation = String(l.designation || '').trim();
+      var quantite = U.parseNumber(l.quantite);
+      var prix = U.parseNumber(l.prixUnitaire);
+      if (!designation) warnings.push('Ligne ' + (i + 1) + ' : désignation vide.');
+      if (quantite <= 0) warnings.push('Ligne ' + (i + 1) + ' : quantité <= 0.');
+      if (prix < 0) warnings.push('Ligne ' + (i + 1) + ' : prix négatif.');
+      if (designation && quantite > 0 && prix >= 0) {
+        lines.push({
+          designation: designation,
+          quantite: quantite,
+          prixUnitaire: prix,
+          unite: String(l.unite || 'U'),
+          type: String(l.type || 'materiel'),
+          prixAchat: U.parseNumber(l.prixAchat)
+        });
+      }
+    }
+
+    if (lines.length === 0) {
+      U.toast('Aucune ligne de document valide.', 'error', 4000);
+      return;
+    }
+
+    _documentPreview = {
+      parsed: parsed,
+      lines: lines,
+      warnings: warnings
+    };
+    _iaPreviewAction = 'document';
+
+    var html = '<div class="ia-preview-block"><h4>Préparation du document IA</h4>';
+    html += '<div><strong>Type :</strong> ' + U.escapeHtml(parsed.document.type || 'devis') + '</div>';
+    html += '<div><strong>Client :</strong> ' + U.escapeHtml(parsed.client && parsed.client.nom ? parsed.client.nom : '(non renseigné)') + '</div>';
+    html += '<div><strong>Chantier :</strong> ' + U.escapeHtml(parsed.chantier && parsed.chantier.nom ? parsed.chantier.nom : '(non renseigné)') + '</div>';
+    html += '<div><strong>Sujet :</strong> ' + U.escapeHtml(parsed.document.sujet || '') + '</div>';
+    html += '<div><strong>Lignes :</strong> ' + lines.length + '</div>';
+    html += '</div>';
+
+    if (warnings.length > 0) {
+      html += '<div class="ia-preview-block"><h4>⚠ Anomalies détectées</h4><ul style="margin:6px 0;padding-left:18px">';
+      for (var wi = 0; wi < warnings.length; wi++) html += '<li>' + U.escapeHtml(warnings[wi]) + '</li>';
+      html += '</ul></div>';
+    }
+
+    if (parsed.document.analyse_technique) {
+      html += '<div class="ia-preview-block"><h4>Hypothèses IA</h4>' +
+        '<p>' + U.escapeHtml(parsed.document.analyse_technique) + '</p></div>';
+    }
+
+    html += '<div class="ia-preview-block"><p class="muted">Après confirmation, les références nécessaires seront créées puis le formulaire sera pré-rempli. Rien n’est enregistré comme document comptable avant ta confirmation finale dans le formulaire.</p></div>';
+    document.getElementById('iaPreviewBody').innerHTML = html;
+    U.showFlex('iaPreviewModal');
+  };
+
+  IA.confirmDocumentPreview = function () {
+    if (!_documentPreview) return false;
+    if (!VC.Auth || !VC.Auth.isAdmin()) {
+      U.toast('Préparation réservée aux administrateurs.', 'warning', 4000);
+      return false;
+    }
+
+    var preview = _documentPreview;
+    var parsed = preview.parsed;
+    if (preview.warnings.length > 0 &&
+        (!VC.Auth.confirmAdminException ||
+         !VC.Auth.confirmAdminException(preview.warnings.join('\n')))) {
+      U.toast('Préparation annulée après anomalie détectée.', 'warning', 4000);
+      return false;
+    }
+
     var clientId = '';
     var chantierId = '';
 
-    // 1. Créer le Client s'il n'existe pas
     if (parsed.client && parsed.client.nom) {
-      var existingClient = VC.Clients.exists(parsed.client.nom) ? VC.Clients.getFiltered().find(function(c){ return c.nom === parsed.client.nom; }) : null;
+      var existingClient = VC.Clients && VC.Clients.exists(parsed.client.nom)
+        ? VC.Clients.getFiltered().find(function (c) { return String(c.nom || '').toLowerCase() === String(parsed.client.nom).toLowerCase(); })
+        : null;
       if (existingClient) {
         clientId = existingClient.id;
       } else {
@@ -1005,15 +1211,16 @@
           telephone: parsed.client.telephone || '',
           mf: parsed.client.mf || '',
           type: parsed.client.type || 'entreprise',
-          notes: 'Créé par l\'IA'
+          notes: 'Créé par l\'IA après confirmation'
         });
         if (newClient) clientId = newClient.id;
       }
     }
 
-    // 2. Créer le Chantier s'il n'existe pas
     if (parsed.chantier && parsed.chantier.nom) {
-      var existingChantier = VC.Chantiers.exists(parsed.chantier.nom) ? VC.Chantiers.getFiltered().find(function(c){ return c.nom === parsed.chantier.nom; }) : null;
+      var existingChantier = VC.Chantiers && VC.Chantiers.exists(parsed.chantier.nom)
+        ? VC.Chantiers.getFiltered().find(function (c) { return String(c.nom || '').toLowerCase() === String(parsed.chantier.nom).toLowerCase(); })
+        : null;
       if (existingChantier) {
         chantierId = existingChantier.id;
       } else {
@@ -1022,34 +1229,33 @@
           adresse: parsed.chantier.adresse || '',
           clientId: clientId,
           statut: 'en_cours',
-          notes: 'Créé par l\'IA'
+          notes: 'Créé par l\'IA après confirmation'
         });
         if (newChantier) chantierId = newChantier.id;
       }
     }
 
-    // 3. Préparer les lignes et créer les articles si besoin
     var finalItems = [];
-    for (var i = 0; i < parsed.document.lignes.length; i++) {
-      var l = parsed.document.lignes[i];
-      var artId = '';
-      
-      // Chercher si l'article existe déjà
-      var existingArt = VC.Stock.getFiltered().find(function(a){ return a.nom.toLowerCase() === l.designation.toLowerCase(); });
-      if (existingArt) {
-        artId = existingArt.id;
-      } else {
-        // Créer l'article
-        var isService = (l.type === 'main_oeuvre' || l.type === 'service');
+    for (var i = 0; i < preview.lines.length; i++) {
+      var l = preview.lines[i];
+      var existingArt = VC.Stock && typeof VC.Stock.getFiltered === 'function'
+        ? VC.Stock.getFiltered().find(function (a) {
+            return String(a.nom || '').toLowerCase() === String(l.designation).toLowerCase();
+          })
+        : null;
+      var artId = existingArt ? existingArt.id : '';
+
+      if (!artId) {
+        var isService = l.type === 'main_oeuvre' || l.type === 'service';
         var newArt = VC.Store.save('articles', {
           nom: l.designation,
           designation: l.designation,
           prix: l.prixUnitaire,
-          prixAchat: isService ? 0 : (l.prixAchat || 0),
-          unite: l.unite || 'U',
+          prixAchat: isService ? 0 : l.prixAchat,
+          unite: l.unite,
           hs: isService,
           actif: true,
-          notes: 'Créé par l\'IA'
+          notes: 'Créé par l\'IA après confirmation'
         });
         if (newArt) artId = newArt.id;
       }
@@ -1059,12 +1265,11 @@
         designation: l.designation,
         quantite: l.quantite,
         prix: l.prixUnitaire,
-        unite: l.unite || 'U',
+        unite: l.unite,
         remise: 0
       });
     }
 
-    // 4. Préparer l'objet pour le formulaire de facture
     var prefill = {
       type: parsed.document.type === 'facture' ? 'facture' : 'devis',
       clientId: clientId,
@@ -1076,15 +1281,16 @@
       timbre: parsed.document.timbre || 1.000
     };
 
-    // 5. Fermer la modale IA et ouvrir le formulaire
+    IA.closePreview();
     IA.close();
-    U.toast('Document préparé ! Vérifie et enregistre.', 'success', 3000);
-    
+    U.toast('Références préparées. Vérifie puis enregistre le document.', 'success', 3000);
+
     if (VC.Invoices && typeof VC.Invoices.openWithPrefill === 'function') {
       VC.Invoices.openWithPrefill(prefill);
     } else {
       U.toast('Erreur : module Facture indisponible.', 'error');
     }
+    return true;
   };
   IA.attachEvents = function () {
     var keys = Object.keys(IA_MODELS);
