@@ -304,12 +304,27 @@
           var ok = U.confirm(
             '⚠ Mode REMPLACER : TOUTES les données actuelles seront écrasées.\n\n' +
             _warningDetail +
-            'Après cette opération, seule la corbeille permet de revenir en arrière.\n\n' +
+            'Une copie de sécurité automatique sera téléchargée avant le remplacement.\n\n' +
             'Continuer ?'
           );
           if (!ok) {
             _importing = false;
             throw new Error('Import annulé (confirmation replace refusée)');
+          }
+
+          try {
+            B.export();
+            U.toast('Sauvegarde de sécurité créée avant remplacement', 'success', 4000);
+          } catch (e) {
+            VC.logError('28-backup', 'Sauvegarde de sécurité avant replace échouée', e);
+            var continueWithoutBackup = U.confirm(
+              'Impossible de créer la sauvegarde de sécurité automatique.\n\n' +
+              'Remplacer quand même les données ?'
+            );
+            if (!continueWithoutBackup) {
+              _importing = false;
+              throw new Error('Import annulé (backup de sécurité impossible)');
+            }
           }
         }
 

@@ -41,6 +41,13 @@
   var _initialLoadDone = false;
   var _broadcastChannel = null;
   var _applyingRemote = false;
+  var _persistenceStatus = {
+    ok: true,
+    failed: 0,
+    quotaExceeded: false,
+    lastError: '',
+    updatedAt: 0
+  };
 
   /* ═══════════════════════════════════════════════════════════
      SECTION 2 — REGISTRATION
@@ -706,7 +713,15 @@
       localStorage.setItem(spec.saveKey, serialized);
       return true;
     } catch (e) {
-      if (e && (e.name === 'QuotaExceededError' || e.code === 22)) {
+      var quotaExceeded = !!(e && (e.name === 'QuotaExceededError' || e.code === 22));
+      _persistenceStatus.ok = false;
+      _persistenceStatus.failed++;
+      _persistenceStatus.quotaExceeded = _persistenceStatus.quotaExceeded || quotaExceeded;
+      _persistenceStatus.lastError = quotaExceeded
+        ? 'Quota localStorage dépassé'
+        : (e && e.message ? String(e.message).slice(0, 200) : 'Sauvegarde locale échouée');
+      _persistenceStatus.updatedAt = Date.now();
+      if (quotaExceeded) {
         VC.logError('02-store', 'persistOne(' + name + '): quota localStorage dépassé', e);
       } else {
         VC.logError('02-store', 'persistOne(' + name + ') échoué', e);
@@ -728,6 +743,8 @@
   S.saveAll = function () {
     var names = Object.keys(_registry);
     var ok = 0, failed = 0;
+    _persistenceStatus.failed = 0;
+    _persistenceStatus.quotaExceeded = false;
 
     for (var i = 0; i < names.length; i++) {
       if (_persistOne(names[i])) ok++;
@@ -736,8 +753,20 @@
     if (_persistTrash()) ok++;
     else failed++;
 
+    _persistenceStatus.ok = failed === 0;
+    _persistenceStatus.failed = failed;
+    _persistenceStatus.updatedAt = Date.now();
+
+    if (failed === 0) {
+      _persistenceStatus.lastError = '';
+    }
+
     _broadcast({ type: 'saveAll', names: names });
-    return { ok: ok, failed: failed };
+    return { ok: ok, failed: failed, status: _persistenceStatus };
+  };
+
+  S.getPersistenceStatus = function () {
+    return Object.assign({}, _persistenceStatus);
   };
 
   S.loadAll = function () {

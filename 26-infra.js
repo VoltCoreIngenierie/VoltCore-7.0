@@ -315,6 +315,20 @@
 
       badge.style.display = 'inline-flex';
 
+      if (typeof S.getPersistenceStatus === 'function') {
+        var persistence = S.getPersistenceStatus();
+        if (!persistence.ok) {
+          badge.textContent = persistence.quotaExceeded
+            ? '⚠ Stockage plein'
+            : '⚠ Sauvegarde échouée';
+          badge.style.color = 'var(--danger)';
+          badge.title = persistence.lastError || 'Une écriture locale a échoué';
+          return;
+        }
+      }
+
+      badge.removeAttribute('title');
+
       if (sec < 60) {
         badge.textContent = '✓ Sauvegardé';
         badge.style.color = 'var(--success)';

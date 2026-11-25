@@ -53,6 +53,26 @@
 
   Auth.currentUser = null;
 
+  Auth.getRole = function () {
+    if (!Auth.currentUser) return '';
+    var role = String(Auth.currentUser.role || '').toLowerCase();
+    return role === 'admin' || role === 'user' || role === 'reader' ? role : '';
+  };
+
+  Auth.isAdmin = function () {
+    return Auth.getRole() === 'admin';
+  };
+
+  Auth.canWrite = function () {
+    var role = Auth.getRole();
+    return role === 'admin' || role === 'user';
+  };
+
+  Auth.canRead = function () {
+    var role = Auth.getRole();
+    return role === 'admin' || role === 'user' || role === 'reader';
+  };
+
   var __authBusy = false;
   var __inactivityTimer = null;
   var __inactivityHandlers = null;
@@ -776,8 +796,7 @@
       U.toast('Connecte-toi d\'abord.', 'error');
       return false;
     }
-    var role = String(Auth.currentUser.role || 'admin').toLowerCase();
-    if (role !== 'admin') {
+    if (!Auth.isAdmin()) {
       U.toast('Accès réservé aux administrateurs.', 'warning');
       return false;
     }
