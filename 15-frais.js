@@ -43,7 +43,7 @@
       categorie: 'enum|transport,repas,carburant,fournitures,loyer,telephone,assurance,salaires,banque,autres',
       description: 'string',
       /* FIX R-frais : required + plage commençant à 0.01 → 0 est rejeté */
-      montant: 'float|0.01-999999999|required',
+      montant: 'float|-999999999-999999999|required',
       chantierId: 'string',
       fournisseur: 'string',
       notes: 'string'
@@ -247,8 +247,11 @@
     var date = U.getVal('fraisDate');
 
     if (montant <= 0) {
-      if (errEl) errEl.textContent = 'Montant > 0 requis.';
-      return;
+      if (!VC.Auth || !VC.Auth.confirmAdminException ||
+          !VC.Auth.confirmAdminException('Montant non positif : ' + U.formatMoney(montant) + '.')) {
+        if (errEl) errEl.textContent = 'Montant non positif refusé.';
+        return;
+      }
     }
     if (!U.isValidDateString(date)) {
       if (errEl) errEl.textContent = 'Date invalide.';

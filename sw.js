@@ -10,7 +10,7 @@
        incrémenter CACHE_VERSION. Sinon le SW sert l'ancienne version.
    ═══════════════════════════════════════════════════════════ */
 
-var CACHE_VERSION = 'voltcore-v7.0.8';
+var CACHE_VERSION = 'voltcore-v7.0.13';
 var CACHE_PREFIX = 'voltcore-';
 var STATIC_CACHE = CACHE_VERSION + '-static';
 var HTML_CACHE = CACHE_VERSION + '-html';
@@ -55,6 +55,7 @@ var STATIC_ASSETS = [
   './27-migrate.js',
   './28-backup.js',
   './29-init.js',
+  './31-license.js',
   './30-boot.js',
   './99-sandbox.js',
 

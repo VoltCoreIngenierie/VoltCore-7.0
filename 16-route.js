@@ -58,8 +58,8 @@
       destination: 'enum|tunis,sfax,autre',
       adressePrecise: 'string',
       chantierId: 'string',
-      kmDepart: 'float|0-9999999',
-      kmRetour: 'float|0-9999999',
+      kmDepart: 'float|-9999999-9999999',
+      kmRetour: 'float|-9999999-9999999',
       statut: 'enum|brouillon,envoye,recu,retourne,archive',
       notes: 'string'
     }
@@ -715,7 +715,32 @@
     }
     if (Rt.numeroExists(numero, id)) {
       if (errEl) errEl.textContent = 'Numéro déjà utilisé : ' + numero;
-      return;
+      if (!VC.Auth || !VC.Auth.confirmAdminException ||
+          !VC.Auth.confirmAdminException('Le numéro "' + numero + '" est déjà utilisé.')) {
+        return;
+      }
+    }
+
+    var routeWarnings = [];
+    var kmDepartNum = U.parseNumber(kmDepart);
+    var kmRetourNum = U.parseNumber(kmRetour);
+    if (kmDepartNum < 0) routeWarnings.push('Kilométrage départ négatif (' + kmDepartNum + ').');
+    if (kmRetourNum < 0) routeWarnings.push('Kilométrage retour négatif (' + kmRetourNum + ').');
+    if (kmRetourNum > 0 && kmDepartNum > kmRetourNum) {
+      routeWarnings.push('Kilométrage retour inférieur au départ (' + kmDepartNum + ' > ' + kmRetourNum + ').');
+    }
+    for (var rw = 0; rw < _modalMateriel.length; rw++) {
+      var rm = _modalMateriel[rw];
+      if (rm && U.parseNumber(rm.quantite) <= 0) {
+        routeWarnings.push('Quantité matérielle <= 0 sur la ligne "' + String(rm.designation || '') + '".');
+      }
+    }
+    if (routeWarnings.length > 0) {
+      if (!VC.Auth || !VC.Auth.confirmAdminException ||
+          !VC.Auth.confirmAdminException(routeWarnings.join('\n'))) {
+        if (errEl) errEl.textContent = 'Enregistrement annulé après anomalie détectée.';
+        return;
+      }
     }
 
     /* Filtrer les lignes vides */

@@ -129,9 +129,11 @@
 
       /* Log */
       _log('backup.export', filename + ' (' + _formatSize(json.length) + ')');
+      return true;
     } catch (e) {
       VC.logError('28-backup', 'export échoué', e);
       U.toast('Erreur d\'export : ' + (e.message || 'inconnue'), 'error', 4000);
+      return false;
     }
   };
 

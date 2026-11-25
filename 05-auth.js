@@ -73,6 +73,33 @@
     return role === 'admin' || role === 'user' || role === 'reader';
   };
 
+  Auth.confirmAdminException = function (message) {
+    if (!Auth.isAdmin()) {
+      U.toast('Une exception administrative est requise.', 'warning', 4000);
+      return false;
+    }
+    var text = 'Vérification administrateur — anomalie détectée :\n\n' +
+      String(message || 'Valeur inhabituelle') + '\n\nContinuer quand même ?';
+    var accepted = !!U.confirm(text);
+
+    try {
+      if (VC.Infra && typeof VC.Infra.logAdminException === 'function') {
+        VC.Infra.logAdminException(message, accepted);
+      } else {
+        VC.logWarn('05-auth', accepted
+          ? 'Exception administrateur acceptée'
+          : 'Exception administrateur refusée', {
+            user: Auth.currentUser.username,
+            message: String(message || '').slice(0, 1000)
+          });
+      }
+    } catch (e) {
+      VC.logError('05-auth', 'Journal exception administrateur échoué', e);
+    }
+
+    return accepted;
+  };
+
   var __authBusy = false;
   var __inactivityTimer = null;
   var __inactivityHandlers = null;

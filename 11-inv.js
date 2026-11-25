@@ -799,27 +799,30 @@
 
     if (_items.length === 0) return { ok: false, error: 'Ajoute au moins une ligne.' };
 
+    var warnings = [];
     for (var i = 0; i < _items.length; i++) {
       var it = _items[i];
       if (!String(it.designation || '').trim()) {
-        return { ok: false, error: 'Ligne ' + (i + 1) + ' : désignation vide.' };
+        warnings.push('Ligne ' + (i + 1) + ' : désignation vide.');
       }
-      if (U.parseNumber(it.quantite) <= 0) {
-        return { ok: false, error: 'Ligne ' + (i + 1) + ' : quantité > 0 requise.' };
+      var quantite = U.parseNumber(it.quantite);
+      if (quantite <= 0) {
+        warnings.push('Ligne ' + (i + 1) + ' : quantité <= 0 (' + quantite + ').');
       }
-      if (U.parseNumber(it.quantite) > VC.MAX_DOC_QTY) {
-        return { ok: false, error: 'Ligne ' + (i + 1) + ' : quantité suspecte (> ' + VC.MAX_DOC_QTY + ').' };
+      if (quantite > VC.MAX_DOC_QTY) {
+        warnings.push('Ligne ' + (i + 1) + ' : quantité suspecte (' + quantite + ').');
       }
-      if (U.parseNumber(it.prix) > VC.MAX_DOC_PU) {
-        return { ok: false, error: 'Ligne ' + (i + 1) + ' : prix suspect (> ' + VC.MAX_DOC_PU + ').' };
+      var prix = U.parseNumber(it.prix);
+      if (prix > VC.MAX_DOC_PU) {
+        warnings.push('Ligne ' + (i + 1) + ' : prix suspect (' + U.formatMoney(prix) + ').');
       }
       var rem = U.parseNumber(it.remise);
       if (rem < 0 || rem > 100) {
-        return { ok: false, error: 'Ligne ' + (i + 1) + ' : remise entre 0 et 100.' };
+        warnings.push('Ligne ' + (i + 1) + ' : remise hors limites (' + rem + '%).');
       }
     }
 
-    return { ok: true };
+    return { ok: true, warnings: warnings };
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -834,6 +837,18 @@
       return false;
     }
     U.setText('invoiceFormError', '');
+
+    if (v.warnings && v.warnings.length > 0) {
+      if (!VC.Auth || typeof VC.Auth.confirmAdminException !== 'function') {
+        U.toast('Confirmation administrateur indisponible.', 'error', 4000);
+        return false;
+      }
+      var anomalyMessage = v.warnings.join('\n');
+      if (!VC.Auth.confirmAdminException(anomalyMessage)) {
+        U.setText('invoiceFormError', 'Enregistrement annulé après anomalie détectée.');
+        return false;
+      }
+    }
 
     var totals = Inv.computeTotals();
 
@@ -885,15 +900,42 @@
         return false;
       }
     } else {
-      if (!doc.numero) doc.numero = S.genererNumero(doc.type);
-      doc.createdAt = new Date().toISOString();
-      if (!S.save('documents', doc)) {
-        U.setText('invoiceFormError', 'Erreur de sauvegarde.');
-        return false;
+      if (doc.numero) {
+        doc.createdAt = new Date().toISOString();
+        if (!S.save('documents', doc)) {
+          U.setText('invoiceFormError', 'Erreur de sauvegarde.');
+          return false;
+        }
+      } else if (!S.reserveNumero) {
+        doc.numero = S.genererNumero(doc.type);
+        doc.createdAt = new Date().toISOString();
+        if (!S.save('documents', doc)) {
+          U.setText('invoiceFormError', 'Erreur de sauvegarde.');
+          return false;
+        }
+        S.incrementCompteur(doc.type);
+      } else {
+        return S.reserveNumero(doc.type).then(function (numero) {
+          doc.numero = numero;
+          doc.createdAt = new Date().toISOString();
+          if (!S.save('documents', doc)) {
+            U.setText('invoiceFormError', 'Erreur de sauvegarde.');
+            return false;
+          }
+          return _finishInvoiceSave(doc);
+        }).catch(function (e) {
+          VC.logError('11-inv', 'Réservation numéro échouée', e);
+          U.setText('invoiceFormError', 'Impossible de générer un numéro unique.');
+          U.toast('Erreur de génération du numéro.', 'error', 4000);
+          return false;
+        });
       }
-      S.incrementCompteur(doc.type);
     }
 
+    return _finishInvoiceSave(doc);
+  };
+
+  function _finishInvoiceSave(doc) {
     /* Avoir : lie la facture parente */
     if (doc.type === 'avoir' && doc.parentFactureId) {
       _linkAvoirToParent(doc.id, doc.parentFactureId);
@@ -913,7 +955,7 @@
     }
 
     return true;
-  };
+  }
 
   function _linkAvoirToParent(avoirId, parentId) {
     var parent = S.getById('documents', parentId);

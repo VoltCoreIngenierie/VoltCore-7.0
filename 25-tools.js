@@ -830,6 +830,17 @@
       return;
     }
 
+    if (VC.Backup && typeof VC.Backup.export === 'function') {
+      var backupExported = VC.Backup.export();
+      if (!backupExported) {
+        var continueRestore = U.confirm(
+          'Impossible de créer la sauvegarde de sécurité.\n\n' +
+          'Restaurer quand même le backup IndexedDB ?'
+        );
+        if (!continueRestore) return;
+      }
+    }
+
     IDB.backups.restore(id).then(function (payload) {
       if (!payload || typeof payload !== 'object') {
         U.toast('Backup introuvable.', 'error');

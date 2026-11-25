@@ -189,33 +189,27 @@
    */
   function _checkAccess() {
     return new Promise(function (resolve) {
-      /* 1. Trusted device → bypass total */
-      if (_isTrustedDevice()) {
-        VC.logInfo('30-boot', 'Appareil de confiance — bypass licence');
-        _hideSkeleton();
-        resolve(true);
-        return;
-      }
+      /* 1. Trusted device concerne uniquement l’auto-login.
+         Il ne contourne plus la vérification de la licence. */
 
-      /* 2. Sinon, vérification licence standard */
+      /* 2. Vérification licence standard */
       if (typeof VC.bootWithLicense !== 'function') {
-        // FIX BLOC E : Fonction factice pour éviter le warning rouge
-        // (En attendant le vrai module de licence)
-        resolve(true);
+        VC.logError('30-boot', 'Module licence absent');
+        _showSkeletonError('Module de licence absent. Restaure les fichiers VOLTCORE.');
+        resolve(false);
         return;
       }
 
       try {
-        Promise.resolve(VC.bootWithLicense()).then(function () {
-          /* bootWithLicense gère l'affichage de la licence ou appelle checkLogin */
-          resolve(true);
+        Promise.resolve(VC.bootWithLicense()).then(function (granted) {
+          resolve(granted !== false);
         }).catch(function (e) {
           VC.logError('30-boot', 'bootWithLicense échoué', e);
-          resolve(true); /* On laisse bootWithLicense gérer ses propres erreurs */
+          resolve(false);
         });
       } catch (e) {
         VC.logError('30-boot', 'bootWithLicense throw', e);
-        resolve(true);
+        resolve(false);
       }
     });
   }
@@ -257,7 +251,12 @@
     _stepInitAutoBackup();
 
     /* ── Étape 6 : Licence + login ── */
-    _checkAccess().then(function () {
+    _checkAccess().then(function (accessGranted) {
+      if (!accessGranted) {
+        VC.logWarn('30-boot', 'Accès bloqué — licence requise');
+        return;
+      }
+
       /* Si trusted device ou licence OK → vérifier login */
       if (typeof VC.checkLogin === 'function') {
         try {

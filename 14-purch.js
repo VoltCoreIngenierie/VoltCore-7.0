@@ -439,6 +439,25 @@
       return;
     }
 
+    /* Anomalies : confirmation admin uniquement */
+    var warnings = [];
+    for (var wi = 0; wi < _modalLines.length; wi++) {
+      var wl = _modalLines[wi];
+      if (!wl) continue;
+      var wq = U.parseNumber(wl.quantite);
+      var wpu = U.parseNumber(wl.prixUnitaire);
+      if (wq <= 0) warnings.push('Ligne "' + String(wl.designation || '') + '" : quantité <= 0 (' + wq + ').');
+      if (wpu < 0) warnings.push('Ligne "' + String(wl.designation || '') + '" : prix négatif (' + U.formatMoney(wpu) + ').');
+      if (wpu > VC.MAX_DOC_PU) warnings.push('Ligne "' + String(wl.designation || '') + '" : prix suspect (' + U.formatMoney(wpu) + ').');
+    }
+    if (warnings.length > 0) {
+      if (!VC.Auth || !VC.Auth.confirmAdminException ||
+          !VC.Auth.confirmAdminException(warnings.join('\n'))) {
+        if (errEl) errEl.textContent = 'Enregistrement annulé après anomalie détectée.';
+        return;
+      }
+    }
+
     /* Lignes valides */
     var validLines = [];
     for (var i = 0; i < _modalLines.length; i++) {

@@ -134,6 +134,13 @@
     return Object.keys(_registry);
   };
 
+  S.register('compteurs', {
+    type: 'object',
+    saveKey: 'voltcore_compteurs',
+    default: {},
+    backup: true
+  });
+
   /* ═══════════════════════════════════════════════════════════
      SECTION 3 — NORMALISATION
      ═══════════════════════════════════════════════════════════ */
@@ -354,6 +361,13 @@
      SECTION 5 — ÉCRITURE
      ═══════════════════════════════════════════════════════════ */
 
+  function _canMutate() {
+    if (!VC.Auth || !VC.Auth.currentUser) return true;
+    return typeof VC.Auth.canWrite === 'function'
+      ? VC.Auth.canWrite()
+      : String(VC.Auth.currentUser.role || '').toLowerCase() !== 'reader';
+  }
+
   /**
    * Upsert atomique d'un item.
    * - Si item.id existe dans la collection → remplace
@@ -363,6 +377,10 @@
    * Retourne l'item normalisé, ou null si invalide.
    */
   S.save = function (name, rawItem) {
+    if (!_canMutate()) {
+      VC.logWarn('02-store', 'save(' + name + '): accès lecteur — mutation refusée');
+      return null;
+    }
     var spec = _registry[name];
     if (!spec) {
       VC.logError('02-store', 'save(' + name + '): collection non enregistrée');
@@ -414,6 +432,10 @@
    * - Persiste
    */
   S.delete = function (name, id) {
+    if (!_canMutate()) {
+      VC.logWarn('02-store', 'delete(' + name + '): accès lecteur — mutation refusée');
+      return false;
+    }
     var spec = _registry[name];
     if (!spec) {
       VC.logError('02-store', 'delete(' + name + '): collection non enregistrée');
@@ -454,6 +476,10 @@
    * - Persiste
    */
   S.replaceAll = function (name, newArray) {
+    if (!_canMutate()) {
+      VC.logWarn('02-store', 'replaceAll(' + name + '): accès lecteur — mutation refusée');
+      return false;
+    }
     var spec = _registry[name];
     if (!spec) {
       VC.logError('02-store', 'replaceAll(' + name + '): non enregistré');
@@ -510,6 +536,10 @@
   };
 
   S.setObject = function (name, obj) {
+    if (!_canMutate()) {
+      VC.logWarn('02-store', 'setObject(' + name + '): accès lecteur — mutation refusée');
+      return false;
+    }
     var spec = _registry[name];
     if (!spec || spec.type !== 'object') {
       VC.logError('02-store', 'setObject(' + name + '): type non object');
@@ -526,6 +556,10 @@
   };
 
   S.setValue = function (name, value) {
+    if (!_canMutate()) {
+      VC.logWarn('02-store', 'setValue(' + name + '): accès lecteur — mutation refusée');
+      return false;
+    }
     var spec = _registry[name];
     if (!spec || (spec.type !== 'string' && spec.type !== 'number')) {
       VC.logError('02-store', 'setValue(' + name + '): type non string/number');
@@ -688,6 +722,51 @@
     return prefix + '-' + year + '-' + String(next).padStart(4, '0');
   };
 
+  S.reserveNumero = function (type) {
+    var t = String(type || '').toLowerCase();
+    var prefixes = {
+      facture: 'FAC', devis: 'DEV', bl: 'BL',
+      avoir: 'AV', attachement: 'ATT', achat: 'ACH', bonroute: 'BR'
+    };
+    var prefix = prefixes[t] || 'DOC';
+    var year = new Date().getFullYear();
+    var key = t + '_' + year;
+
+    function reserveFromLatest() {
+      var c = {};
+      try {
+        var raw = localStorage.getItem('voltcore_compteurs');
+        c = raw ? JSON.parse(raw) : {};
+      } catch (e) {
+        c = S.getCompteurs() || {};
+        VC.logWarn('02-store', 'Lecture compteurs depuis fallback', e);
+      }
+      var next = (parseInt(c[key], 10) || 0) + 1;
+      c[key] = next;
+      _data['compteurs'] = c;
+      if (!_persistOne('compteurs')) {
+        throw new Error('Impossible de sauvegarder le compteur');
+      }
+      global.__lastDataChange = Date.now();
+      return prefix + '-' + year + '-' + String(next).padStart(4, '0');
+    }
+
+    if (global.navigator && global.navigator.locks &&
+        typeof global.navigator.locks.request === 'function') {
+      return global.navigator.locks.request(
+        'voltcore-counter-' + key,
+        { mode: 'exclusive' },
+        reserveFromLatest
+      );
+    }
+
+    try {
+      return Promise.resolve(reserveFromLatest());
+    } catch (e) {
+      return Promise.reject(e);
+    }
+  };
+
   S.resetCompteurs = function () {
     _data['compteurs'] = {};
     _persistOne('compteurs');
@@ -711,6 +790,12 @@
         serialized = String(value);
       }
       localStorage.setItem(spec.saveKey, serialized);
+      _persistenceStatus.ok = true;
+      _persistenceStatus.failed = 0;
+      _persistenceStatus.quotaExceeded = false;
+      _persistenceStatus.lastError = '';
+      _persistenceStatus.updatedAt = Date.now();
+      global.__lastDataChange = Date.now();
       return true;
     } catch (e) {
       var quotaExceeded = !!(e && (e.name === 'QuotaExceededError' || e.code === 22));

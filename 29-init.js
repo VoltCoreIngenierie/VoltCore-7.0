@@ -660,6 +660,49 @@
      SECTION 9 — INIT APP (après login)
      ═══════════════════════════════════════════════════════════ */
 
+  function _applyRoleVisibility() {
+    try {
+      if (!VC.Auth || typeof VC.Auth.canWrite !== 'function') return;
+      var canWrite = VC.Auth.canWrite();
+      var writeOnlyIds = [
+        'btnAddClient','btnImportClients','btnAddSupplier','btnImportSuppliers','btnImportStock',
+        'btnAddChantier','btnImportChantiers','btnAddInvoice','btnImportPurchases','btnAddFrais',
+        'btnImportFrais','btnAddBonRoute','btnImportBonsRoute','btnImportHR','btnAddDocument',
+        'btnImportDocuments','btnImportCompleteBackup','btnSaveSettings','btnOpenSignatureModal',
+        'btnRemoveSignatureDefault','btnUploadCachetDefault','btnRemoveCachetDefault','btnRemoveLogo',
+        'btnResetServiceWorker','mobileFab','clientSaveBtn','supplierSaveBtn','articleSaveBtn',
+        'familleSaveBtn','chantierSaveBtn','hrEmployeeSaveBtn','hrWorkSaveBtn','hrTxSaveBtn',
+        'invoiceSaveBtn','paymentSaveBtn','purchaseSaveBtn','supplierPaymentSaveBtn','fraisSaveBtn',
+        'bonRouteSaveBtn','documentUploadSaveBtn','btnSaveScanAll','btnSaveScanAsCachet',
+        'btnSaveSignature','iaGenerateDocBtn','btnResetCompteurs','btnAddInvoiceItem',
+        'btnAddInvoiceAttachment','btnAddPurchaseLine','btnAddBonRouteMaterielLine','btnAddBonRouteDocLine',
+        'btnAddScanPage','btnClearBrouillon'
+      ];
+
+      var nodes = document.querySelectorAll('[data-write-only="true"]');
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        node.style.display = canWrite ? '' : 'none';
+        if (!canWrite && typeof node.setAttribute === 'function') {
+          node.setAttribute('aria-disabled', 'true');
+          node.setAttribute('disabled', 'disabled');
+        }
+      }
+
+      for (var j = 0; j < writeOnlyIds.length; j++) {
+        var el = document.getElementById(writeOnlyIds[j]);
+        if (!el) continue;
+        el.style.display = canWrite ? '' : 'none';
+        if (!canWrite) {
+          el.setAttribute('aria-disabled', 'true');
+          el.setAttribute('disabled', 'disabled');
+        }
+      }
+    } catch (e) {
+      VC.logError('29-init', 'application visibilité rôle échouée', e);
+    }
+  }
+
   Init.initApp = function () {
     if (_appBooted) {
       VC.logWarn('29-init', 'initApp déjà appelé — skip');
@@ -685,7 +728,10 @@
         }
       }
 
-      /* 3. Section de départ */
+      /* 3. Droits UI */
+      _applyRoleVisibility();
+
+      /* 4. Section de départ */
       var startSection = _getInitialSection();
       showSection(startSection);
 

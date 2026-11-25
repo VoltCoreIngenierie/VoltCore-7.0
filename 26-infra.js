@@ -219,6 +219,23 @@
     return S.getAll('errorLog');
   };
 
+  Infra.logAdminException = function (message, accepted) {
+    var log = S.getAll('errorLog');
+    log.push({
+      date: new Date().toISOString(),
+      type: 'admin-exception',
+      message: String(message || '').slice(0, 1000),
+      location: '',
+      stack: '',
+      user: (VC.Auth && VC.Auth.currentUser && VC.Auth.currentUser.username)
+        ? String(VC.Auth.currentUser.username) : 'anon',
+      decision: accepted ? 'accepted' : 'refused',
+      url: _getCurrentUrl()
+    });
+    if (log.length > MAX_LOG_ENTRIES) log = log.slice(-MAX_LOG_ENTRIES);
+    S.replaceAll('errorLog', log);
+  };
+
   Infra.getErrorCount = function () {
     return S.getAll('errorLog').length;
   };
