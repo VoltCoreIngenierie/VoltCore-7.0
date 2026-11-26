@@ -285,13 +285,39 @@
       });
     },
 
+    putIfAbsent: function (id, blob, mime) {
+      if (!id || !blob) {
+        return Promise.reject(new Error('id et blob requis'));
+      }
+      var record = {
+        id: String(id),
+        data: blob,
+        mime: String(mime || blob.type || 'application/octet-stream'),
+        size: blob.size || 0,
+        createdAt: new Date().toISOString()
+      };
+      return _txn(VC.IDB_STORE_BLOBS, 'readwrite', function (store) {
+        return store.add(record);
+      }).then(function () {
+        return { ok: true, id: record.id, size: record.size };
+      }).catch(function (e) {
+        VC.logError('03-idb.blobs.putIfAbsent', 'put échoué pour ' + id, e);
+        throw e;
+      });
+    },
+
     get: function (id) {
+      if (!id) return Promise.resolve(null);
+      return I.blobs.getStrict(id).catch(function (e) {
+        VC.logError('03-idb.blobs.get', 'get échoué pour ' + id, e);
+        return null;
+      });
+    },
+
+    getStrict: function (id) {
       if (!id) return Promise.resolve(null);
       return _txn(VC.IDB_STORE_BLOBS, 'readonly', function (store) {
         return store.get(String(id));
-      }).catch(function (e) {
-        VC.logError('03-idb.blobs.get', 'get échoué pour ' + id, e);
-        return null;
       });
     },
 

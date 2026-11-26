@@ -313,7 +313,10 @@
       return Promise.reject(new Error('Liste de pièces jointes invalide ou trop volumineuse.'));
     }
     if (!IDB || !IDB.blobs || typeof IDB.blobs.put !== 'function' ||
+        typeof IDB.blobs.putIfAbsent !== 'function' ||
+        typeof IDB.blobs.getStrict !== 'function' ||
         typeof IDB.dataURLToBlob !== 'function' ||
+        typeof IDB.blobToDataURL !== 'function' ||
         typeof IDB.validateDocumentBlob !== 'function') {
       return Promise.reject(new Error('Validation des pièces jointes indisponible.'));
     }
@@ -353,12 +356,49 @@
     return Promise.all(tasks);
   }
 
-  function _restoreBlobs(blobs) {
+  function _prepareBlobRestore(blobs, mode) {
+    if (mode === 'replace' || !blobs.length) return Promise.resolve(blobs);
+    var tasks = [];
+    for (var i = 0; i < blobs.length; i++) {
+      (function (entry) {
+        tasks.push(IDB.blobs.getStrict(entry.id).then(function (existing) {
+          if (!existing) return entry;
+          if (!existing.data || existing.mime !== entry.mime ||
+              existing.data.type !== entry.blob.type) {
+            throw new Error('Une pièce jointe existe déjà avec un type différent. ' +
+              'Utilise le mode REMPLACER après une sauvegarde.');
+          }
+          return Promise.all([
+            IDB.blobToDataURL(existing.data),
+            IDB.blobToDataURL(entry.blob)
+          ]).then(function (dataUrls) {
+            var oldBytes = dataUrls[0].slice(dataUrls[0].indexOf(',') + 1);
+            var newBytes = dataUrls[1].slice(dataUrls[1].indexOf(',') + 1);
+            if (oldBytes !== newBytes) {
+              throw new Error('Collision d’identifiant de pièce jointe détectée. ' +
+                'Utilise le mode REMPLACER après une sauvegarde.');
+            }
+            return { id: entry.id, mime: entry.mime, blob: entry.blob, skipWrite: true };
+          });
+        }));
+      })(blobs[i]);
+    }
+    return Promise.all(tasks);
+  }
+
+  function _restoreBlobs(blobs, mode) {
     if (!Array.isArray(blobs) || blobs.length === 0) return Promise.resolve(0);
     var tasks = [];
     for (var i = 0; i < blobs.length; i++) {
       (function (entry) {
-        tasks.push(IDB.blobs.put(entry.id, entry.blob, entry.mime).then(function () {
+        if (entry.skipWrite) {
+          tasks.push(Promise.resolve(false));
+          return;
+        }
+        var write = mode === 'replace'
+          ? IDB.blobs.put(entry.id, entry.blob, entry.mime)
+          : IDB.blobs.putIfAbsent(entry.id, entry.blob, entry.mime);
+        tasks.push(write.then(function () {
           return true;
         }));
       })(blobs[i]);
@@ -385,6 +425,11 @@
           _importing = false;
           throw new Error('Import annulé par l\'utilisateur');
         }
+        return _prepareBlobRestore(analysis.validatedBlobs, mode).then(function (blobs) {
+          analysis.validatedBlobs = blobs;
+          return mode;
+        });
+      }).then(function (mode) {
 
         if (mode === 'replace') {
           // FIX R60 : compter les items qui seront poussés en corbeille
@@ -450,7 +495,7 @@
 
   function _completeImport(analysis, mode) {
     var blobs = analysis.validatedBlobs || [];
-    return _restoreBlobs(blobs).then(function (restored) {
+    return _restoreBlobs(blobs, mode).then(function (restored) {
       var stats = _executeImport(analysis, mode);
       stats.blobsRestored = restored;
       return stats;

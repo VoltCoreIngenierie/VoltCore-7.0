@@ -41,7 +41,7 @@
 <body>
 
 <h1>VOLTCORE v7.0.7 — Tests E2E v2</h1>
-<div class="sub">300 tests · 21 catégories · timeout · skip · rapport 3 formats</div>
+<div class="sub">302 tests · 21 catégories · timeout · skip · rapport 3 formats</div>
 
 <div id="summary">⏳ Chargement…</div>
 <div id="results"></div>
@@ -538,7 +538,7 @@
   });
 
   /* ═══════════════════════════════════════════════════════════
-     CAT E — IDB BLOBS (10)
+     CAT E — IDB BLOBS (11)
      ═══════════════════════════════════════════════════════════ */
   add('E. IDB', 'isSupported', function () {
     return typeof IDB.isSupported === 'function' && IDB.isSupported();
@@ -590,6 +590,22 @@
       type: 'image/svg+xml'
     });
     return (await IDB.validateDocumentBlob(blob, 'image/svg+xml')) === false;
+  });
+  add('E. IDB', 'putIfAbsent empêche le remplacement concurrent', async function () {
+    var ref = uid('sec_unique');
+    var dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    var blob = await IDB.dataURLToBlob(dataUrl);
+    try {
+      await IDB.blobs.putIfAbsent(ref, blob, 'image/png');
+      try {
+        await IDB.blobs.putIfAbsent(ref, blob, 'image/png');
+        return false;
+      } catch (e) {
+        return true;
+      }
+    } finally {
+      await IDB.blobs.delete(ref);
+    }
   });
   add('E. IDB', 'aperçu PDF utilise iframe sandboxé', async function () {
     var ref = uid('sec_pdf');
@@ -1896,7 +1912,7 @@
     return (w === 800 && h === 400); // Vérifie le calcul
   });
   /* ═══════════════════════════════════════════════════════════
-     CAT V — BACKUP (11)
+     CAT V — BACKUP (12)
      ═══════════════════════════════════════════════════════════ */
   add('V. Backup', 'buildData marker', function () {
     var data = VC.Backup.buildData();
@@ -2029,6 +2045,42 @@
       return false;
     } catch (e) {
       return String(e && e.message || '').indexOf('Contenu de pièce jointe invalide') >= 0;
+    }
+  });
+  add('V. Backup', 'fusion refuse la collision avec un blob existant', async function () {
+    var ref = uid('sec_collision');
+    var originalUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    var original = await IDB.dataURLToBlob(originalUrl);
+    var replacement = new Blob([original, 'different'], { type: 'image/png' });
+    await IDB.blobs.put(ref, original, 'image/png');
+
+    var originalAsk = VC.Backup.askImportMode;
+    VC.Backup.askImportMode = function () { return Promise.resolve('merge'); };
+    try {
+      var payload = {
+        _voltcore_backup: true,
+        _version: '7.0',
+        _app: 'VOLTCORE',
+        collections: {},
+        trash: {},
+        blobs: [{
+          id: ref,
+          mime: 'image/png',
+          size: replacement.size,
+          dataUrl: await IDB.blobToDataURL(replacement)
+        }]
+      };
+      var file = new File([JSON.stringify(payload)], 'collision.json',
+        { type: 'application/json' });
+      try {
+        await VC.Backup.importFile(file);
+        return false;
+      } catch (e) {
+        return String(e && e.message || '').indexOf('Collision d’identifiant') >= 0;
+      }
+    } finally {
+      VC.Backup.askImportMode = originalAsk;
+      await IDB.blobs.delete(ref);
     }
   });
   /* ═══════════════════════════════════════════════════════════
