@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
    VOLTCORE — 20-scan-js.js
-   VERSION : v7.0.7
+   VERSION : v7.0.8
    RÔLE : Pipeline scanner en JS pur (fallback sans OpenCV).
           - Détection simplifiée par gradient (Sobel)
           - Warp perspective bilinéaire (pas seulement 2 triangles)
@@ -369,11 +369,23 @@
       });
     }
 
-    /* Dimensions destination */
-    var w1 = Math.hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y);
-    var w2 = Math.hypot(corners[2].x - corners[3].x, corners[2].y - corners[3].y);
-    var h1 = Math.hypot(corners[3].x - corners[0].x, corners[3].y - corners[0].y);
-    var h2 = Math.hypot(corners[2].x - corners[1].x, corners[2].y - corners[1].y);
+    /* Dimensions destination calculées en ES5 */
+    var w1 = Math.sqrt(
+      (corners[1].x - corners[0].x) * (corners[1].x - corners[0].x) +
+      (corners[1].y - corners[0].y) * (corners[1].y - corners[0].y)
+    );
+    var w2 = Math.sqrt(
+      (corners[2].x - corners[3].x) * (corners[2].x - corners[3].x) +
+      (corners[2].y - corners[3].y) * (corners[2].y - corners[3].y)
+    );
+    var h1 = Math.sqrt(
+      (corners[3].x - corners[0].x) * (corners[3].x - corners[0].x) +
+      (corners[3].y - corners[0].y) * (corners[3].y - corners[0].y)
+    );
+    var h2 = Math.sqrt(
+      (corners[2].x - corners[1].x) * (corners[2].x - corners[1].x) +
+      (corners[2].y - corners[1].y) * (corners[2].y - corners[1].y)
+    );
 
     var dstW = Math.round(Math.max(w1, w2));
     var dstH = Math.round(Math.max(h1, h2));
@@ -744,7 +756,7 @@
 
   VC._scanJsLoaded = true;
 
-  VC.logInfo('20-scan-js', 'Fallback JS pur chargé', {
+  VC.logInfo('20-scan-js', 'Fallback JS pur chargé v7.0.8', {
     modes: ['document', 'photo', 'text', 'none'],
     detect: 'sobel-extremes',
     warp: 'bilinear-homography'

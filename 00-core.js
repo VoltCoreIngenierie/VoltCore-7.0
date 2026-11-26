@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
    VOLTCORE — 00-core.js
-   VERSION : v7.0.7
+   VERSION : v7.0.8
    RÔLE : Fondations — namespace global, constantes, polyfills,
           détection matérielle, logger minimal.
    DÉPENDANCES : aucune
@@ -40,8 +40,8 @@ VC.Migrate = VC.Migrate || {};   /* rempli par 27-migrate.js */
    SECTION 2 — CONSTANTES GLOBALES
    ═══════════════════════════════════════════════════════════ */
 
-VC.VERSION = '7.0.7';
-VC.BUILD_DATE = '2026-11-11';
+VC.VERSION = '7.0.8';
+VC.BUILD_DATE = '2026-11-26';
 
 /* Préfixe localStorage — toutes les clés commencent par ça.
    Ne JAMAIS changer (casserait la compatibilité avec les données existantes). */
@@ -497,7 +497,7 @@ try {
    SECTION 8 — LOG DE DÉMARRAGE
    ═══════════════════════════════════════════════════════════ */
 
-VC.logInfo('00-core', 'Fondations chargées', {
+VC.logInfo('00-core', 'Module chargé v7.0.8', {
   version: VC.VERSION,
   build: VC.BUILD_DATE,
   storagePrefix: VC.STORAGE_PREFIX

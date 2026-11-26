@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
    VOLTCORE — 19-scan-cv.js
-   VERSION : v7.0.7
+   VERSION : v7.0.8
    RÔLE : Pipeline OpenCV pour le scanner.
           - Détection auto des coins (4 stratégies + scoring)
           - Warp perspective avec bilinéaire
@@ -540,15 +540,16 @@
         });
       }
 
-      /* Calcule les dimensions de destination */
-      var w1 = Math.hypot(cornersPx[1].x - cornersPx[0].x,
-                          cornersPx[1].y - cornersPx[0].y);
-      var w2 = Math.hypot(cornersPx[2].x - cornersPx[3].x,
-                          cornersPx[2].y - cornersPx[3].y);
-      var h1 = Math.hypot(cornersPx[3].x - cornersPx[0].x,
-                          cornersPx[3].y - cornersPx[0].y);
-      var h2 = Math.hypot(cornersPx[2].x - cornersPx[1].x,
-                          cornersPx[2].y - cornersPx[1].y);
+      /* Calcule les dimensions de destination avec des opérations ES5 */
+      function _dist(ax, ay, bx, by) {
+        var dx = bx - ax;
+        var dy = by - ay;
+        return Math.sqrt(dx * dx + dy * dy);
+      }
+      var w1 = _dist(cornersPx[0].x, cornersPx[0].y, cornersPx[1].x, cornersPx[1].y);
+      var w2 = _dist(cornersPx[3].x, cornersPx[3].y, cornersPx[2].x, cornersPx[2].y);
+      var h1 = _dist(cornersPx[0].x, cornersPx[0].y, cornersPx[3].x, cornersPx[3].y);
+      var h2 = _dist(cornersPx[1].x, cornersPx[1].y, cornersPx[2].x, cornersPx[2].y);
 
       var dstW = Math.round(Math.max(w1, w2));
       var dstH = Math.round(Math.max(h1, h2));
@@ -1023,7 +1024,7 @@
 
   VC._scanCvLoaded = true;
 
-  VC.logInfo('19-scan-cv', 'Pipeline OpenCV chargé', {
+  VC.logInfo('19-scan-cv', 'Pipeline OpenCV chargé v7.0.8', {
     cvAvailable: _cvReady(),
     strategies: 4,
     modes: ['document', 'photo', 'text', 'none']

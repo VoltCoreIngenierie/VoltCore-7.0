@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
    VOLTCORE — 18-scan.js
-   VERSION : v7.0.7
+   VERSION : v7.0.8
    RÔLE : Orchestrateur du scanner.
           - Gestion caméra (start/stop/capture)
           - Import galerie
@@ -181,7 +181,10 @@
   Scan.open = function (opts) {
     _resetState();
     _scanTarget = (opts && opts.target === 'cachet') ? 'cachet' : 'default';
-    
+    if (_scanTarget === 'cachet') {
+      _mode = 'cachet';
+    }
+
     // Afficher le bouton "Enregistrer comme cachet" uniquement si demandé
     var btnCachet = document.getElementById('btnSaveScanAsCachet');
     if (btnCachet) btnCachet.style.display = (_scanTarget === 'cachet') ? '' : 'none';
@@ -740,6 +743,7 @@
       document: '📄 Document',
       photo: '📷 Photo',
       text: '✏️ Texte',
+      cachet: '🔏 Cachet (transparent)',
       none: '🎨 Brut'
     };
     return labels[mode] || mode;
@@ -1109,7 +1113,7 @@
 
   VC._scanLoaded = true;
 
-  VC.logInfo('18-scan', 'Orchestrateur scan chargé', {
+  VC.logInfo('18-scan', 'Orchestrateur scan chargé v7.0.8', {
     cvAvailable: _cvAvailable()
   });
 

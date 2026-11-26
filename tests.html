@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VOLTCORE v7.0.7 — Tests E2E v2</title>
+<title>VOLTCORE v7.0.8 — Tests E2E v2</title>
 <style>
   *{box-sizing:border-box}
   body{font-family:-apple-system,Arial,sans-serif;margin:0;padding:20px;background:#f5f7fb;color:#1f2937;font-size:14px}
@@ -40,8 +40,8 @@
 </head>
 <body>
 
-<h1>VOLTCORE v7.0.7 — Tests E2E v2</h1>
-<div class="sub">302 tests · 21 catégories · timeout · skip · rapport 3 formats</div>
+<h1>VOLTCORE v7.0.8 — Tests E2E v2</h1>
+<div class="sub">308 tests · 21 catégories · timeout · skip · rapport 3 formats</div>
 
 <div id="summary">⏳ Chargement…</div>
 <div id="results"></div>
@@ -274,7 +274,7 @@
   /* ═══════════════════════════════════════════════════════════
      CAT A — CORE + UTILS (15)
      ═══════════════════════════════════════════════════════════ */
-  add('A. Core', 'VERSION existe', function () { return VC.VERSION === '7.0.7'; });
+  add('A. Core', 'VERSION existe', function () { return VC.VERSION === '7.0.8'; });
   add('A. Core', 'device détecté', function () { return VC.device && typeof VC.device.mobile === 'boolean'; });
   add('A. Core', 'log.info existe', function () { return typeof VC.logInfo === 'function'; });
 
@@ -884,7 +884,7 @@
   });
 
   /* ═══════════════════════════════════════════════════════════
-     CAT I — STOCK (15)
+     CAT I — STOCK (18)
      ═══════════════════════════════════════════════════════════ */
   add('I. Stock', 'save article valide', function () {
     return S.save('articles', { id: uid('a'), nom: 'Art1', prix: 10 }) !== null;
@@ -955,6 +955,75 @@
     if (stillExists) S.delete('articles', artId);
     return stillExists;
   });
+  add('I. Stock', 'suppression autorisée si achat annulé', function () {
+    var artId = uid('a');
+    var purId = uid('p');
+    S.save('articles', { id: artId, nom: 'ArticleAchatAnnule' });
+    S.save('purchaseInvoices', {
+      id: purId, numero: 'ACH-ANNULE', date: '2026-01-01',
+      statut: 'annulee',
+      lines: [{ articleId: artId, designation: 'ArticleAchatAnnule' }]
+    });
+    var origConfirm = U.confirm;
+    var origToast = U.toast;
+    var origToastUndo = U.toastUndo;
+    U.confirm = function () { return true; };
+    U.toast = function () {};
+    U.toastUndo = function () {};
+    try {
+      VC.Stock.remove(artId);
+    } finally {
+      U.confirm = origConfirm;
+      U.toast = origToast;
+      U.toastUndo = origToastUndo;
+    }
+    var removed = S.getById('articles', artId) === null;
+    var pur = S.getById('purchaseInvoices', purId);
+    var namePreserved = pur && pur.lines[0]._articleNomOrphelin === 'ArticleAchatAnnule';
+    S.delete('purchaseInvoices', purId);
+    return removed && namePreserved;
+  });
+  add('I. Stock', 'achat actif protège article avec message inchangé', function () {
+    var artId = uid('a');
+    var purId = uid('p');
+    S.save('articles', { id: artId, nom: 'ArticleAchatActif' });
+    S.save('purchaseInvoices', {
+      id: purId, numero: 'ACH-ACTIF', date: '2026-01-01',
+      statut: 'emise',
+      lines: [{ articleId: artId, designation: 'ArticleAchatActif' }]
+    });
+    var origConfirm = U.confirm;
+    var origToast = U.toast;
+    var captured = '';
+    U.confirm = function () { return true; };
+    U.toast = function (msg) { captured = String(msg || ''); };
+    try {
+      VC.Stock.remove(artId);
+    } finally {
+      U.confirm = origConfirm;
+      U.toast = origToast;
+    }
+    var protectedItem = S.getById('articles', artId) !== null;
+    S.delete('purchaseInvoices', purId);
+    if (protectedItem) S.delete('articles', artId);
+    return protectedItem &&
+      captured === 'Article utilisé dans un achat. Suppression refusée.';
+  });
+  add('I. Stock', 'debounce regroupe les rendus articles', async function () {
+    await sleep(180);
+    VC.Stock.attachEvents();
+    var ids = [uid('a'), uid('a'), uid('a')];
+    var originalRender = VC.Stock.render;
+    var renderCount = 0;
+    VC.Stock.render = function () { renderCount++; };
+    for (var i = 0; i < ids.length; i++) {
+      S.save('articles', { id: ids[i], nom: 'ArticleDebounce' + i });
+    }
+    await sleep(200);
+    VC.Stock.render = originalRender;
+    for (var j = 0; j < ids.length; j++) S.delete('articles', ids[j]);
+    return renderCount === 1;
+  });
   add('I. Stock', 'computePriceAlerts array', function () {
     return Array.isArray(VC.Stock.computePriceAlerts());
   });
@@ -975,7 +1044,7 @@
   });
 
   /* ═══════════════════════════════════════════════════════════
-     CAT J — CHANTIERS (12)
+     CAT J — CHANTIERS (14)
      ═══════════════════════════════════════════════════════════ */
   add('J. Chantiers', 'save valide', function () {
     return S.save('chantiers', { id: uid('ch'), nom: 'Ch1' }) !== null;
@@ -1071,6 +1140,62 @@
     S.delete('documents', docId);
     S.delete('chantiers', chId);
     return msgMentions && stillExists;
+  });
+  add('J. Chantiers', 'delete signale aussi les achats liés', function () {
+    var chId = uid('ch');
+    var purId = uid('p');
+    S.save('chantiers', { id: chId, nom: 'ChantierAvecAchat' });
+    S.save('purchaseInvoices', {
+      id: purId, numero: 'ACH-CHANTIER', date: '2026-01-01',
+      chantierId: chId, lines: [], totalTTC: 100
+    });
+    var origConfirm = U.confirm;
+    var origToast = U.toast;
+    var origToastUndo = U.toastUndo;
+    var captured = '';
+    U.confirm = function (msg) { captured = String(msg || ''); return false; };
+    U.toast = function () {};
+    U.toastUndo = function () {};
+    try {
+      VC.Chantiers.remove(chId);
+    } finally {
+      U.confirm = origConfirm;
+      U.toast = origToast;
+      U.toastUndo = origToastUndo;
+    }
+    var stillExists = S.getById('chantiers', chId) !== null;
+    S.delete('purchaseInvoices', purId);
+    S.delete('chantiers', chId);
+    return stillExists && captured.indexOf('• 1 achat(s)') >= 0;
+  });
+  add('J. Chantiers', 'prefill devis et facture sans global résiduel', function () {
+    var chId = uid('ch');
+    S.save('chantiers', { id: chId, nom: 'ChantierPrefill', clientId: 'client-b' });
+    var invoices = VC.Invoices;
+    var originalPrefill = invoices.openWithPrefill;
+    var originalOpenForm = invoices.openForm;
+    var originalPending = window.__pendingChantierPrefill;
+    var captured = [];
+    window.__pendingChantierPrefill = null;
+    invoices.openWithPrefill = function (prefill) { captured.push(prefill); };
+    try {
+      VC.Chantiers.createDevis(chId);
+      var noGlobalAfterPrefill = window.__pendingChantierPrefill === null;
+      invoices.openWithPrefill = null;
+      invoices.openForm = function () { captured.push(window.__pendingChantierPrefill); };
+      VC.Chantiers.createFacture(chId);
+      return noGlobalAfterPrefill &&
+        captured.length === 2 &&
+        captured[0].type === 'devis' &&
+        captured[1].type === 'facture' &&
+        captured[1].chantierId === chId &&
+        window.__pendingChantierPrefill === null;
+    } finally {
+      invoices.openWithPrefill = originalPrefill;
+      invoices.openForm = originalOpenForm;
+      window.__pendingChantierPrefill = originalPending;
+      S.delete('chantiers', chId);
+    }
   });
   add('J. Chantiers', 'getFiltered array', function () {
     return Array.isArray(VC.Chantiers.getFiltered());
@@ -2539,7 +2664,7 @@
            typeof VC.Documents !== 'undefined';
   });
   add('Intégrité', 'version app cohérente', function () {
-    return VC.VERSION === '7.0.7';
+    return VC.VERSION === '7.0.8';
   });
   /* ═══════════════════════════════════════════════════════════
      CAT RÉGRESSION BLOC 1 — Vérifie que les patches 1.2/1.3/1.4
@@ -2549,6 +2674,34 @@
   add('Régression B1', 'Patch 1.2 : 19-scan-cv.js loadé', function () {
     return typeof VC.ScanCV !== 'undefined' &&
            typeof VC.ScanCV.process === 'function';
+  });
+  add('Régression B1', 'scanner cachet ouvre avec le mode cachet actif', function () {
+    var cachetMode = document.createElement('button');
+    var documentMode = document.createElement('button');
+    var saveCachet = document.createElement('button');
+    cachetMode.setAttribute('data-scan-mode', 'cachet');
+    documentMode.setAttribute('data-scan-mode', 'document');
+    saveCachet.id = 'btnSaveScanAsCachet';
+    document.body.appendChild(cachetMode);
+    document.body.appendChild(documentMode);
+    document.body.appendChild(saveCachet);
+    try {
+      VC.Scan.open({ target: 'cachet' });
+      var cachetActive = cachetMode.classList.contains('active') &&
+        !documentMode.classList.contains('active') &&
+        saveCachet.style.display === '';
+      VC.Scan.close();
+      VC.Scan.open();
+      var documentDefault = documentMode.classList.contains('active') &&
+        !cachetMode.classList.contains('active') &&
+        saveCachet.style.display === 'none';
+      return cachetActive && documentDefault;
+    } finally {
+      VC.Scan.close();
+      cachetMode.parentNode.removeChild(cachetMode);
+      documentMode.parentNode.removeChild(documentMode);
+      saveCachet.parentNode.removeChild(saveCachet);
+    }
   });
 
   add('Régression B1', 'Patch 1.2 : _modeDocument existe', function () {
@@ -2857,11 +3010,11 @@
   });
 
   /* ═══════════════════════════════════════════════════════════
-     CAT RÉGRESSION VERSION — Vérifie la cohérence v7.0.7
+     CAT RÉGRESSION VERSION — Vérifie la cohérence v7.0.8
      ═══════════════════════════════════════════════════════════ */
 
-  add('Régression Ver', 'VC.VERSION === 7.0.7', function () {
-    return VC.VERSION === '7.0.7';
+  add('Régression Ver', 'VC.VERSION === 7.0.8', function () {
+    return VC.VERSION === '7.0.8';
   });
 
   add('Régression Ver', 'Tous les modules chargés avec marqueur _loaded', function () {

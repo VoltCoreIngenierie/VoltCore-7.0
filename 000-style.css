@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════
    VOLTCORE — 000-style.css
-   VERSION : v7.0.7
+   VERSION : v7.0.8
    RÔLE : Design system complet (base).
           Palette navy + or + rouge (extraite de facture.html).
    DÉPENDANCES : aucune
@@ -2480,5 +2480,40 @@ input[type="file"].input::file-selector-button:hover {
   .fact-mobile .invoice-items-table .col-total {
     width: auto;
     text-align: left;
+  }
+}
+
+/* ════════ §33 — ACCESSIBILITÉ (A11Y) ════════ */
+
+.btn:focus-visible,
+.btn-icon:focus-visible,
+.btn-primary:focus-visible,
+.nav-item:focus-visible,
+.section-tab:focus-visible,
+.hr-tab:focus-visible,
+.alerts-tab:focus-visible,
+.input:focus-visible,
+.input-search:focus-visible,
+.input-select:focus-visible,
+.section-actions button:focus-visible {
+  outline: 3px solid var(--vc-gold);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .skeleton-spinner,
+  .app-section,
+  .toast,
+  .toast-hide {
+    animation: none !important;
   }
 }

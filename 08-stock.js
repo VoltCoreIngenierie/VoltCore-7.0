@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
    VOLTCORE — 08-stock.js
-   VERSION : v7.0.7
+   VERSION : v7.0.8
    RÔLE : Articles + familles + historique prix + alertes prix
           + pagination + étiquettes + import/export + picker
           pour factures.
@@ -86,6 +86,7 @@
   var _page = 0;
   var _perPage = 50;
   var _filteredList = [];
+  var _articlesRenderTimer = null;
 
   /* Picker state */
   var _pickerCb = null;
@@ -792,11 +793,12 @@
       }
     }
 
-    /* FIX R2 : vérifier aussi les achats */
+    /* FIX R2 : vérifier aussi les achats (sauf annulés) */
     var purchases = S.getAll('purchaseInvoices');
     for (var p = 0; p < purchases.length; p++) {
       var pur = purchases[p];
       if (!pur || !Array.isArray(pur.lines)) continue;
+      if (pur.statut === 'annulee' || pur.annulee === true) continue;
       for (var pl = 0; pl < pur.lines.length; pl++) {
         if (pur.lines[pl] && String(pur.lines[pl].articleId || '') === String(id)) {
           U.toast('Article utilisé dans un achat. Suppression refusée.', 'error', 4000);
@@ -836,6 +838,10 @@
 
     S.saveAll();
 
+    if (_articlesRenderTimer) {
+      clearTimeout(_articlesRenderTimer);
+      _articlesRenderTimer = null;
+    }
     St.render();
     U.toastUndo('Article supprimé : ' + St.getNom(art),
       function () { _restoreArticle(id); }, 5000);
@@ -1409,9 +1415,13 @@
       St.printEtiquettes(null);
     });
 
-    /* Subscribe : re-render auto */
+    /* Subscribe : re-render auto (debounce 150ms) */
     S.subscribe('articles', function () {
-      St.render();
+      if (_articlesRenderTimer) clearTimeout(_articlesRenderTimer);
+      _articlesRenderTimer = setTimeout(function () {
+        _articlesRenderTimer = null;
+        St.render();
+      }, 150);
     });
     S.subscribe('familles', function () {
       St.renderFamilles();
@@ -1466,6 +1476,6 @@
   })();
   VC._stockLoaded = true;
 
-  VC.logInfo('08-stock', 'Module chargé');
+  VC.logInfo('08-stock', 'Module chargé v7.0.8');
 
 })(window);

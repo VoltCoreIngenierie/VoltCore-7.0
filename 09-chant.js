@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
    VOLTCORE — 09-chant.js
-   VERSION : v7.0.7
+   VERSION : v7.0.8
    RÔLE : CRUD chantiers, marges temps réel, mode actif,
           devis/facture 1 clic, import/export, impression.
           Normalisation + save + load + trash : gérés par Store.
@@ -11,7 +11,7 @@
    - ES5 strict
    - Aucun catch silencieux
    - FIX M6 : badge rafraîchi via subscribe (plus besoin de l'appeler au boot)
-   - FIX M8 : deleteChantier vérifie les références (docs, frais, RH)
+   - FIX M8 : deleteChantier vérifie les références (docs, frais, RH, achats)
    - Ne JAMAIS lire/écrire localStorage directement
    ═══════════════════════════════════════════════════════════ */
 
@@ -502,9 +502,9 @@
     var ch = Ch.getById(id);
     if (!ch) return;
 
-    /* FIX M8 : vérifier les références AVANT suppression */
+    /* FIX M8 + BUG-2b : vérifier les références AVANT suppression */
     var refs = _countRefs(id);
-    var total = refs.factures + refs.frais + refs.rh + refs.bonsRoute;
+    var total = refs.factures + refs.frais + refs.rh + refs.bonsRoute + refs.achats;
 
     var msg = 'Supprimer le chantier "' + (ch.nom || '') + '" ?';
     if (total > 0) {
@@ -513,6 +513,7 @@
       if (refs.frais > 0) msg += '• ' + refs.frais + ' frais\n';
       if (refs.rh > 0) msg += '• ' + refs.rh + ' journée(s) RH\n';
       if (refs.bonsRoute > 0) msg += '• ' + refs.bonsRoute + ' bon(s) route\n';
+      if (refs.achats > 0) msg += '• ' + refs.achats + ' achat(s)\n';
       msg += '\nLes références deviendront orphelines.\nContinuer ?';
     }
 
@@ -539,8 +540,9 @@
     var frais = S.getAll('frais');
     var works = S.getAll('hrWorkEntries');
     var bons = S.getAll('bonsRoute');
+    var purchases = S.getAll('purchaseInvoices');
 
-    var factures = 0, nbFrais = 0, nbRh = 0, nbBr = 0;
+    var factures = 0, nbFrais = 0, nbRh = 0, nbBr = 0, nbAchats = 0;
 
     for (var i = 0; i < docs.length; i++) {
       if (docs[i] && String(docs[i].chantierId || '') === sid) factures++;
@@ -554,8 +556,14 @@
     for (var l = 0; l < bons.length; l++) {
       if (bons[l] && String(bons[l].chantierId || '') === sid) nbBr++;
     }
+    for (var m = 0; m < purchases.length; m++) {
+      if (purchases[m] && String(purchases[m].chantierId || '') === sid) nbAchats++;
+    }
 
-    return { factures: factures, frais: nbFrais, rh: nbRh, bonsRoute: nbBr };
+    return {
+      factures: factures, frais: nbFrais, rh: nbRh,
+      bonsRoute: nbBr, achats: nbAchats
+    };
   }
 
   function _restore(id) {
@@ -586,14 +594,19 @@
       notes: 'Chantier : ' + String(ch.nom || '')
     };
 
-    global.__pendingChantierPrefill = prefill;
-
     if (VC.Invoices && typeof VC.Invoices.openWithPrefill === 'function') {
       VC.Invoices.openWithPrefill(prefill);
       return;
     }
     if (VC.Invoices && typeof VC.Invoices.openForm === 'function') {
-      VC.Invoices.openForm();
+      global.__pendingChantierPrefill = prefill;
+      try {
+        VC.Invoices.openForm();
+      } finally {
+        if (global.__pendingChantierPrefill === prefill) {
+          global.__pendingChantierPrefill = null;
+        }
+      }
       return;
     }
 
@@ -619,14 +632,19 @@
       notes: 'Chantier : ' + String(ch.nom || '')
     };
 
-    global.__pendingChantierPrefill = prefill;
-
     if (VC.Invoices && typeof VC.Invoices.openWithPrefill === 'function') {
       VC.Invoices.openWithPrefill(prefill);
       return;
     }
     if (VC.Invoices && typeof VC.Invoices.openForm === 'function') {
-      VC.Invoices.openForm();
+      global.__pendingChantierPrefill = prefill;
+      try {
+        VC.Invoices.openForm();
+      } finally {
+        if (global.__pendingChantierPrefill === prefill) {
+          global.__pendingChantierPrefill = null;
+        }
+      }
       return;
     }
 
@@ -925,6 +943,6 @@
 
   VC._chantLoaded = true;
 
-  VC.logInfo('09-chant', 'Module chargé');
+  VC.logInfo('09-chant', 'Module chargé v7.0.8');
 
 })(window);

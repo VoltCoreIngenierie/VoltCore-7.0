@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
    VOLTCORE — sw.js
-   VERSION : v7.0.7
+   VERSION : v7.0.8
    RÔLE : Service Worker — offline total.
    STRATÉGIE :
      - HTML → network-first (timeout 5s) + fallback cache
@@ -10,7 +10,7 @@
        incrémenter CACHE_VERSION. Sinon le SW sert l'ancienne version.
    ═══════════════════════════════════════════════════════════ */
 
-var CACHE_VERSION = 'voltcore-v7.0.16';
+var CACHE_VERSION = 'voltcore-v7.0.17';
 var CACHE_PREFIX = 'voltcore-';
 var STATIC_CACHE = CACHE_VERSION + '-static';
 var HTML_CACHE = CACHE_VERSION + '-html';
