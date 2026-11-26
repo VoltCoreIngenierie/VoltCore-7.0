@@ -150,11 +150,12 @@
   };
 
   function _isImage(mime) {
-    return String(mime || '').indexOf('image/') === 0;
+    return ['image/jpeg', 'image/png', 'image/webp']
+      .indexOf(String(mime || '').toLowerCase()) !== -1;
   }
 
   function _isPdf(mime) {
-    return String(mime || '') === 'application/pdf';
+    return String(mime || '').toLowerCase() === 'application/pdf';
   }
 
   function _extensionForMime(mime) {
@@ -202,7 +203,14 @@
       var m = meta || {};
       var nom = String(m.nom || file.name || 'Sans nom').trim();
 
-      IDB.blobs.put(storageKey, file, file.type).then(function () {
+      IDB.validateDocumentBlob(file, file.type).then(function (valid) {
+        if (!valid) {
+          reject(new Error('Le contenu réel du fichier ne correspond pas à son type.'));
+          return;
+        }
+        return IDB.blobs.put(storageKey, file, file.type);
+      }).then(function (stored) {
+        if (!stored) return;
         var entry = {
           nom: nom.slice(0, 200),
           categorie: String(m.categorie || 'autre'),
@@ -405,10 +413,16 @@
 
     IDB.blobs.get(doc.storageKey).then(function (row) {
       if (!row || !row.data) return;
-      var url = URL.createObjectURL(row.data);
-      img.src = url;
-      img.style.opacity = '1';
-      /* URL conservée pour la session — GC au reload */
+      IDB.validateDocumentBlob(row.data, doc.mime).then(function (valid) {
+        if (!valid || !_isImage(doc.mime)) {
+          VC.logWarn('17-docs', 'Vignette ignorée : contenu ou type invalide (' + doc.id + ')');
+          return;
+        }
+        var url = URL.createObjectURL(row.data);
+        img.src = url;
+        img.style.opacity = '1';
+        /* URL conservée pour la session — GC au reload */
+      });
     }).catch(function (e) {
       VC.logError('17-docs', 'loadThumb échoué', e);
     });
@@ -658,15 +672,30 @@
         return;
       }
 
-      var url = URL.createObjectURL(row.data);
-      if (isImg) {
-        wrap.innerHTML = '<img src="' + url + '" alt="Aperçu">';
-      } else if (isPdf) {
-        wrap.innerHTML = '<iframe src="' + url + '" title="Aperçu PDF"></iframe>';
-      } else {
-        wrap.innerHTML = '<div class="muted" style="padding:40px">' +
-          'Aperçu non disponible</div>';
-      }
+      return IDB.validateDocumentBlob(row.data, doc.mime).then(function (valid) {
+        if (!valid || (!isImg && !isPdf)) {
+          VC.logWarn('17-docs', 'Aperçu bloqué : contenu ou type invalide (' + doc.id + ')');
+          wrap.innerHTML = '<div class="muted" style="padding:40px">' +
+            'Aperçu bloqué : fichier non valide</div>';
+          return;
+        }
+
+        var url = URL.createObjectURL(new Blob([row.data], { type: doc.mime }));
+        while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
+        if (isImg) {
+          var img = document.createElement('img');
+          img.src = url;
+          img.alt = 'Aperçu';
+          wrap.appendChild(img);
+        } else {
+          var frame = document.createElement('iframe');
+          frame.setAttribute('sandbox', '');
+          frame.setAttribute('referrerpolicy', 'no-referrer');
+          frame.setAttribute('title', 'Aperçu PDF sécurisé');
+          frame.src = url;
+          wrap.appendChild(frame);
+        }
+      });
     }).catch(function (e) {
       VC.logError('17-docs', 'openDetail load preview échoué', e);
       var wrap2 = document.getElementById('docDetailPreviewWrap');
@@ -720,8 +749,23 @@
         U.toast('Fichier introuvable.', 'error');
         return;
       }
-      var url = URL.createObjectURL(row.data);
-      global.open(url, '_blank');
+      return IDB.validateDocumentBlob(row.data, doc.mime).then(function (valid) {
+        if (!valid) {
+          U.toast('Ouverture bloquée : contenu du fichier invalide.', 'error');
+          return;
+        }
+        if (_isPdf(doc.mime)) {
+          D.download(id);
+          U.toast('Le PDF a été téléchargé pour éviter son ouverture active.', 'info');
+          return;
+        }
+        if (!_isImage(doc.mime)) {
+          U.toast('Type de fichier non pris en charge.', 'warning');
+          return;
+        }
+        var url = URL.createObjectURL(new Blob([row.data], { type: doc.mime }));
+        global.open(url, '_blank', 'noopener,noreferrer');
+      });
     }).catch(function (e) {
       VC.logError('17-docs', 'openInTab échoué', e);
     });

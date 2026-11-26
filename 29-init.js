@@ -94,6 +94,7 @@
     'loginModal': null,               /* Ne pas fermer par Échap */
     'lockOverlay': null,              /* Ne pas fermer par Échap */
     'licenseModal': null,             /* Ne pas fermer par Échap */
+    'forcedPasswordChangeModal': null, /* Ne pas fermer par Échap */
     'userManagementModal': function () {
       if (VC.Auth && VC.Auth.closeUserModal) VC.Auth.closeUserModal();
     },

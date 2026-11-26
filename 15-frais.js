@@ -42,8 +42,8 @@
       date: 'date|required',
       categorie: 'enum|transport,repas,carburant,fournitures,loyer,telephone,assurance,salaires,banque,autres',
       description: 'string',
-      /* FIX R-frais : required + plage commençant à 0.01 → 0 est rejeté */
-      montant: 'float|-999999999-999999999|required',
+      /* Le montant doit être strictement positif. */
+      montant: 'float|0.01-999999999|required',
       chantierId: 'string',
       fournisseur: 'string',
       notes: 'string'

@@ -41,6 +41,9 @@
   var _initialLoadDone = false;
   var _broadcastChannel = null;
   var _applyingRemote = false;
+  var _sourceId = 'tab-' + Date.now().toString(36) + '-' +
+    Math.random().toString(36).slice(2);
+  var _revision = 0;
   var _persistenceStatus = {
     ok: true,
     failed: 0,
@@ -825,9 +828,51 @@
     }
   }
 
+  function _snapshotVoltcoreKeys() {
+    var snapshot = {};
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var key = localStorage.key(i);
+        if (key && key.indexOf(VC.STORAGE_PREFIX) === 0) {
+          snapshot[key] = localStorage.getItem(key);
+        }
+      }
+    } catch (e) {
+      VC.logError('02-store', 'snapshot localStorage échoué', e);
+      return null;
+    }
+    return snapshot;
+  }
+
+  function _restoreVoltcoreKeys(snapshot) {
+    if (!snapshot) return false;
+    try {
+      for (var i = 0; i < localStorage.length;) {
+        var key = localStorage.key(i);
+        if (key && key.indexOf(VC.STORAGE_PREFIX) === 0 &&
+            Object.prototype.hasOwnProperty.call(snapshot, key) === false) {
+          localStorage.removeItem(key);
+          continue;
+        }
+        i++;
+      }
+      var keys = Object.keys(snapshot);
+      for (var j = 0; j < keys.length; j++) {
+        if (snapshot[keys[j]] !== null) {
+          localStorage.setItem(keys[j], snapshot[keys[j]]);
+        }
+      }
+      return true;
+    } catch (e) {
+      VC.logError('02-store', 'rollback localStorage échoué', e);
+      return false;
+    }
+  }
+
   S.saveAll = function () {
     var names = Object.keys(_registry);
     var ok = 0, failed = 0;
+    var snapshot = _snapshotVoltcoreKeys();
     _persistenceStatus.failed = 0;
     _persistenceStatus.quotaExceeded = false;
 
@@ -842,9 +887,18 @@
     _persistenceStatus.failed = failed;
     _persistenceStatus.updatedAt = Date.now();
 
-    if (failed === 0) {
-      _persistenceStatus.lastError = '';
+    if (failed > 0) {
+      _restoreVoltcoreKeys(snapshot);
+      _persistenceStatus.ok = false;
+      _persistenceStatus.lastError = 'Sauvegarde atomique annulée — dernière copie restaurée';
+      VC.logError('02-store', 'saveAll: rollback atomique exécuté', {
+        failed: failed,
+        ok: ok
+      });
+      return { ok: 0, failed: failed, status: _persistenceStatus };
     }
+
+    _persistenceStatus.lastError = '';
 
     _broadcast({ type: 'saveAll', names: names });
     return { ok: ok, failed: failed, status: _persistenceStatus };
@@ -907,12 +961,14 @@
       parsed = JSON.parse(raw);
     } catch (e) {
       VC.logError('02-store', 'loadArray(' + name + '): JSON invalide', e);
+      _quarantineRaw(name, spec.saveKey, raw);
       _data[name] = [];
       return;
     }
 
     if (!Array.isArray(parsed)) {
       VC.logError('02-store', 'loadArray(' + name + '): pas un tableau');
+      _quarantineRaw(name, spec.saveKey, raw);
       _data[name] = [];
       return;
     }
@@ -1009,6 +1065,25 @@
     }
   }
 
+  function _quarantineRaw(name, sourceKey, raw) {
+    try {
+      var key = 'voltcore_quarantine_raw_' + name;
+      var rawExisting = localStorage.getItem(key);
+      var arr = rawExisting ? JSON.parse(rawExisting) : [];
+      if (!Array.isArray(arr)) arr = [];
+      arr.push({
+        _quarantinedAt: new Date().toISOString(),
+        _sourceKey: sourceKey,
+        raw: raw
+      });
+      if (arr.length > 20) arr = arr.slice(-20);
+      localStorage.setItem(key, JSON.stringify(arr));
+      VC.logWarn('02-store', 'Collection JSON corrompue mise en quarantaine : ' + name);
+    } catch (e) {
+      VC.logError('02-store', '_quarantineRaw échoué', e);
+    }
+  }
+
   S.getQuarantine = function (name) {
     try {
       var raw = localStorage.getItem('voltcore_quarantine_' + name);
@@ -1047,10 +1122,12 @@
         _data[name] = parsed;
       } else {
         VC.logWarn('02-store', 'loadObject(' + name + '): pas un objet, reset');
+        _quarantineRaw(name, spec.saveKey, raw);
         _data[name] = _cloneDefault(spec.default, spec.type);
       }
     } catch (e) {
       VC.logError('02-store', 'loadObject(' + name + '): JSON invalide', e);
+      _quarantineRaw(name, spec.saveKey, raw);
       _data[name] = _cloneDefault(spec.default, spec.type);
     }
   }
@@ -1256,6 +1333,7 @@
       _broadcastChannel.onmessage = function (ev) {
         var data = ev.data || {};
         if (!data.type) return;
+        if (data.sourceId && data.sourceId === _sourceId) return;
 
         _applyingRemote = true;
         try {
@@ -1289,7 +1367,13 @@
   function _broadcast(payload) {
     if (_applyingRemote) return;
     try {
-      if (_broadcastChannel) _broadcastChannel.postMessage(payload);
+      if (_broadcastChannel) {
+        _revision++;
+        payload.sourceId = _sourceId;
+        payload.revision = _revision;
+        payload.timestamp = Date.now();
+        _broadcastChannel.postMessage(payload);
+      }
     } catch (e) {
       VC.logError('02-store', 'broadcast échoué', e);
     }

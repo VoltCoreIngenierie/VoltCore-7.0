@@ -41,7 +41,7 @@
 <body>
 
 <h1>VOLTCORE v7.0.7 — Tests E2E v2</h1>
-<div class="sub">295 tests · 21 catégories · timeout · skip · rapport 3 formats</div>
+<div class="sub">300 tests · 21 catégories · timeout · skip · rapport 3 formats</div>
 
 <div id="summary">⏳ Chargement…</div>
 <div id="results"></div>
@@ -136,10 +136,10 @@
 <!-- Modules 00 → 28 (PAS 29/30) -->
 <script src="./00-core.js"></script>
 <script src="./01-utils.js"></script>
-<script src="./02-store.js?v=20261125-ia7"></script>
-<script src="./03-idb.js"></script>
+<script src="./02-store.js?v=20261126-security"></script>
+<script src="./03-idb.js?v=20261126-blob-security"></script>
 <script src="./04-alerts.js"></script>
-<script src="./05-auth.js"></script>
+<script src="./05-auth.js?v=20261126-security"></script>
 <script src="./06-clients.js"></script>
 <script src="./07-suppl.js"></script>
 <script src="./08-stock.js"></script>
@@ -149,9 +149,9 @@
 <script src="./12-inv-view.js"></script>
 <script src="./13-inv-pdf.js"></script>
 <script src="./14-purch.js"></script>
-<script src="./15-frais.js"></script>
+<script src="./15-frais.js?v=20261126-security"></script>
 <script src="./16-route.js"></script>
-<script src="./17-docs.js"></script>
+<script src="./17-docs.js?v=20261126-blob-security"></script>
 <script src="./18-scan.js"></script>
 <script src="./19-scan-cv.js"></script>
 <script src="./20-scan-js.js"></script>
@@ -162,7 +162,7 @@
 <script src="./25-tools.js"></script>
 <script src="./26-infra.js"></script>
 <script src="./27-migrate.js"></script>
-<script src="./28-backup.js"></script>
+<script src="./28-backup.js?v=20261126-blob-security"></script>
 <script src="./31-license.js"></script>
 
 <script>
@@ -538,7 +538,7 @@
   });
 
   /* ═══════════════════════════════════════════════════════════
-     CAT E — IDB BLOBS (6)
+     CAT E — IDB BLOBS (10)
      ═══════════════════════════════════════════════════════════ */
   add('E. IDB', 'isSupported', function () {
     return typeof IDB.isSupported === 'function' && IDB.isSupported();
@@ -575,18 +575,74 @@
     var list = await IDB.blobs.list();
     return Array.isArray(list);
   });
+  add('E. IDB', 'validation blob PNG avec signature valide', async function () {
+    var dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    var blob = await IDB.dataURLToBlob(dataUrl);
+    return await IDB.validateDocumentBlob(blob, 'image/png');
+  });
+  add('E. IDB', 'validation blob refuse SVG déguisé en PNG', async function () {
+    var dataUrl = 'data:image/png;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    var blob = await IDB.dataURLToBlob(dataUrl);
+    return (await IDB.validateDocumentBlob(blob, 'image/png')) === false;
+  });
+  add('E. IDB', 'validation blob refuse MIME actif non autorisé', async function () {
+    var blob = new Blob(['<svg xmlns="http://www.w3.org/2000/svg"></svg>'], {
+      type: 'image/svg+xml'
+    });
+    return (await IDB.validateDocumentBlob(blob, 'image/svg+xml')) === false;
+  });
+  add('E. IDB', 'aperçu PDF utilise iframe sandboxé', async function () {
+    var ref = uid('sec_pdf');
+    var blob = new Blob(['%PDF-1.7'], { type: 'application/pdf' });
+    await IDB.blobs.put(ref, blob, 'application/pdf');
+    var entry = S.save('documentsLib', {
+      nom: 'Test PDF sécurité',
+      categorie: 'autre',
+      mime: 'application/pdf',
+      taille: blob.size,
+      storage: 'idb',
+      storageKey: ref,
+      date: '2026-01-01'
+    });
+    var modal = document.createElement('div');
+    modal.id = 'documentDetailModal';
+    var title = document.createElement('span');
+    title.id = 'documentDetailTitle';
+    var body = document.createElement('div');
+    body.id = 'documentDetailBody';
+    modal.appendChild(title);
+    modal.appendChild(body);
+    document.body.appendChild(modal);
+    try {
+      VC.Documents.openDetail(entry.id);
+      var attempts = 0;
+      while (!body.querySelector('#docDetailPreviewWrap iframe') && attempts < 20) {
+        await new Promise(function (resolve) { setTimeout(resolve, 25); });
+        attempts++;
+      }
+      var frame = body.querySelector('#docDetailPreviewWrap iframe');
+      return !!frame && frame.getAttribute('sandbox') === '';
+    } finally {
+      VC.Documents.closeDetail();
+      if (modal.parentNode) modal.parentNode.removeChild(modal);
+      if (entry && entry.id) S.delete('documentsLib', entry.id);
+      await IDB.blobs.delete(ref);
+    }
+  });
 
   /* ═══════════════════════════════════════════════════════════
      CAT F — AUTH (8)
      ═══════════════════════════════════════════════════════════ */
-  add('F. Auth', 'hashPassword format salt:hash', async function () {
+  add('F. Auth', 'hashPassword format pbkdf2', async function () {
     var h = await VC.Auth.hashPassword('test');
-    return h.indexOf(':') > 0;
+    return h.indexOf('pbkdf2:') === 0;
   });
   add('F. Auth', 'hashPassword salts différents', async function () {
     var h1 = await VC.Auth.hashPassword('test');
     var h2 = await VC.Auth.hashPassword('test');
-    return h1.split(':')[0] !== h2.split(':')[0];
+    var parts1 = h1.split(':');
+    var parts2 = h2.split(':');
+    return parts1.length === 4 && parts2.length === 4 && parts1[2] !== parts2[2];
   });
   add('F. Auth', 'verifyPassword correct', async function () {
     var h = await VC.Auth.hashPassword('secret');
@@ -1840,7 +1896,7 @@
     return (w === 800 && h === 400); // Vérifie le calcul
   });
   /* ═══════════════════════════════════════════════════════════
-     CAT V — BACKUP (10)
+     CAT V — BACKUP (11)
      ═══════════════════════════════════════════════════════════ */
   add('V. Backup', 'buildData marker', function () {
     var data = VC.Backup.buildData();
@@ -1949,6 +2005,31 @@
     }, function () {
       return true;   // rejet = succès du test
     });
+  });
+  add('V. Backup', 'import refuse un SVG déguisé en pièce jointe image', async function () {
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+    var encoded = btoa(svg);
+    var payload = {
+      _voltcore_backup: true,
+      _version: '7.0',
+      _app: 'VOLTCORE',
+      collections: {},
+      trash: {},
+      blobs: [{
+        id: '__test_malicious_blob',
+        mime: 'image/png',
+        size: atob(encoded).length,
+        dataUrl: 'data:image/png;base64,' + encoded
+      }]
+    };
+    var file = new File([JSON.stringify(payload)], 'invalid-blob.json',
+      { type: 'application/json' });
+    try {
+      await VC.Backup.importFile(file);
+      return false;
+    } catch (e) {
+      return String(e && e.message || '').indexOf('Contenu de pièce jointe invalide') >= 0;
+    }
   });
   /* ═══════════════════════════════════════════════════════════
      CAT W — ALERTS (6)

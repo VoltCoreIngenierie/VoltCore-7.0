@@ -157,14 +157,13 @@
           reject(new Error('dataUrl vide ou invalide'));
           return;
         }
-        var parts = dataUrl.split(',');
-        if (parts.length !== 2) {
+        var match = dataUrl.match(/^data:([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+);base64,([a-z0-9+/=]+)$/i);
+        if (!match) {
           reject(new Error('dataUrl: format invalide'));
           return;
         }
-        var mimeMatch = parts[0].match(/:(.*?);/);
-        var mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
-        var binary = atob(parts[1]);
+        var mime = match[1].toLowerCase();
+        var binary = atob(match[2]);
         var bytes = new Uint8Array(binary.length);
         for (var i = 0; i < binary.length; i++) {
           bytes[i] = binary.charCodeAt(i);
@@ -173,6 +172,68 @@
       } catch (e) {
         VC.logError('03-idb', 'dataURLToBlob échoué', e);
         reject(e);
+      }
+    });
+  };
+
+  I.validateDocumentBlob = function (blob, expectedMime) {
+    return new Promise(function (resolve) {
+      var mime = String(expectedMime || '').toLowerCase();
+      var allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+      if (!blob || allowed.indexOf(mime) === -1 ||
+          String(blob.type || '').toLowerCase() !== mime) {
+        resolve(false);
+        return;
+      }
+
+      try {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var bytes = new Uint8Array(reader.result || new ArrayBuffer(0));
+          var valid = false;
+
+          if (mime === 'application/pdf') {
+            var pdfHeader = '%PDF-';
+            var limit = Math.min(bytes.length - pdfHeader.length, 1024);
+            for (var i = 0; i <= limit; i++) {
+              var found = true;
+              for (var j = 0; j < pdfHeader.length; j++) {
+                if (bytes[i + j] !== pdfHeader.charCodeAt(j)) {
+                  found = false;
+                  break;
+                }
+              }
+              if (found) {
+                valid = true;
+                break;
+              }
+            }
+          } else if (mime === 'image/jpeg') {
+            valid = bytes.length >= 3 &&
+              bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+          } else if (mime === 'image/png') {
+            valid = bytes.length >= 8 &&
+              bytes[0] === 0x89 && bytes[1] === 0x50 &&
+              bytes[2] === 0x4e && bytes[3] === 0x47 &&
+              bytes[4] === 0x0d && bytes[5] === 0x0a &&
+              bytes[6] === 0x1a && bytes[7] === 0x0a;
+          } else if (mime === 'image/webp') {
+            valid = bytes.length >= 12 &&
+              bytes[0] === 0x52 && bytes[1] === 0x49 &&
+              bytes[2] === 0x46 && bytes[3] === 0x46 &&
+              bytes[8] === 0x57 && bytes[9] === 0x45 &&
+              bytes[10] === 0x42 && bytes[11] === 0x50;
+          }
+          resolve(valid);
+        };
+        reader.onerror = function () {
+          VC.logError('03-idb.validateDocumentBlob', 'Lecture blob échouée', reader.error);
+          resolve(false);
+        };
+        reader.readAsArrayBuffer(blob.slice(0, 1024));
+      } catch (e) {
+        VC.logError('03-idb.validateDocumentBlob', 'Validation blob échouée', e);
+        resolve(false);
       }
     });
   };

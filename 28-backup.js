@@ -91,6 +91,8 @@
     }
 
     payload.collections = collections;
+    payload.blobs = [];
+    payload.blobsIncluded = false;
 
     /* Trash : toutes les clés, pas seulement 3 (fix C28) */
     payload.trash = _deepClone(S.getTrash());
@@ -118,23 +120,59 @@
    * Export déclenché par le bouton "Exporter (JSON)".
    */
   B.export = function () {
-    try {
-      var data = B.buildData();
+    B.exportAsync().catch(function (e) {
+      VC.logError('28-backup', 'export échoué', e);
+      U.toast('Erreur d\'export : ' + (e.message || 'inconnue'), 'error', 4000);
+    });
+    return true;
+  };
+
+  B.exportAsync = function () {
+    var data = B.buildData();
+    var includeBlobs = IDB && IDB.blobs && typeof IDB.blobs.list === 'function';
+    var blobTask = includeBlobs ? IDB.blobs.list() : Promise.resolve([]);
+
+    return Promise.resolve(blobTask).then(function (list) {
+      var tasks = [];
+      for (var i = 0; i < list.length; i++) {
+        (function (meta) {
+          tasks.push(IDB.blobs.get(meta.id).then(function (record) {
+            if (!record || !record.data) return null;
+            return IDB.blobToDataURL(record.data).then(function (dataUrl) {
+              return {
+                id: meta.id,
+                mime: record.mime || meta.mime || 'application/octet-stream',
+                size: record.size || meta.size || 0,
+                createdAt: record.createdAt || meta.createdAt || '',
+                dataUrl: dataUrl
+              };
+            });
+          }).catch(function (e) {
+            VC.logError('28-backup', 'blob export échoué : ' + meta.id, e);
+            return null;
+          }));
+        })(list[i]);
+      }
+      return Promise.all(tasks);
+    }).then(function (blobs) {
+      var included = [];
+      for (var i = 0; i < blobs.length; i++) {
+        if (blobs[i]) included.push(blobs[i]);
+      }
+      data.blobs = included;
+      data.blobsIncluded = included.length > 0;
+
       var json = JSON.stringify(data, null, 2);
       var blob = new Blob([json], { type: 'application/json' });
       var filename = 'voltcore-backup-' + U.todayISO() + '.json';
-
       U.downloadBlob(blob, filename);
-      U.toast('Backup exporté : ' + filename, 'success', 3000);
-
-      /* Log */
-      _log('backup.export', filename + ' (' + _formatSize(json.length) + ')');
-      return true;
-    } catch (e) {
-      VC.logError('28-backup', 'export échoué', e);
-      U.toast('Erreur d\'export : ' + (e.message || 'inconnue'), 'error', 4000);
-      return false;
-    }
+      U.toast('Backup exporté : ' + filename +
+        (included.length ? ' · ' + included.length + ' fichier(s)' : ''),
+        'success', 4000);
+      _log('backup.export', filename + ' (' + _formatSize(json.length) +
+        ', ' + included.length + ' blobs)');
+      return { ok: true, filename: filename, blobs: included.length };
+    });
   };
 
   function _formatSize(bytes) {
@@ -269,12 +307,80 @@
      SECTION 4 — IMPORT : EXÉCUTION
      ═══════════════════════════════════════════════════════════ */
 
+  function _validateBackupBlobs(blobs) {
+    if (blobs == null) return Promise.resolve([]);
+    if (!Array.isArray(blobs) || blobs.length > 10000) {
+      return Promise.reject(new Error('Liste de pièces jointes invalide ou trop volumineuse.'));
+    }
+    if (!IDB || !IDB.blobs || typeof IDB.blobs.put !== 'function' ||
+        typeof IDB.dataURLToBlob !== 'function' ||
+        typeof IDB.validateDocumentBlob !== 'function') {
+      return Promise.reject(new Error('Validation des pièces jointes indisponible.'));
+    }
+
+    var seen = Object.create(null);
+    var tasks = [];
+    for (var i = 0; i < blobs.length; i++) {
+      (function (entry) {
+        if (!entry || typeof entry.id !== 'string' || !entry.id ||
+            entry.id.length > 256 || seen[entry.id] ||
+            typeof entry.mime !== 'string' || typeof entry.dataUrl !== 'string' ||
+            entry.dataUrl.length > Math.ceil(VC.DOCLIB_MAX_BYTES * 4 / 3) + 256) {
+          tasks.push(Promise.reject(new Error('Pièce jointe invalide dans la sauvegarde.')));
+          return;
+        }
+        seen[entry.id] = true;
+
+        var dataUrlMime = entry.dataUrl.match(/^data:([^;,]+);base64,/i);
+        if (!dataUrlMime || dataUrlMime[1].toLowerCase() !== entry.mime.toLowerCase()) {
+          tasks.push(Promise.reject(new Error('Type MIME incohérent dans la sauvegarde.')));
+          return;
+        }
+        tasks.push(IDB.dataURLToBlob(entry.dataUrl).then(function (blob) {
+          if (blob.size > VC.DOCLIB_MAX_BYTES ||
+              (entry.size != null && Number(entry.size) !== blob.size)) {
+            throw new Error('Taille de pièce jointe invalide dans la sauvegarde.');
+          }
+          return IDB.validateDocumentBlob(blob, entry.mime).then(function (valid) {
+            if (!valid) {
+              throw new Error('Contenu de pièce jointe invalide ou type interdit.');
+            }
+            return { id: entry.id, mime: entry.mime.toLowerCase(), blob: blob };
+          });
+        }));
+      })(blobs[i]);
+    }
+    return Promise.all(tasks);
+  }
+
+  function _restoreBlobs(blobs) {
+    if (!Array.isArray(blobs) || blobs.length === 0) return Promise.resolve(0);
+    var tasks = [];
+    for (var i = 0; i < blobs.length; i++) {
+      (function (entry) {
+        tasks.push(IDB.blobs.put(entry.id, entry.blob, entry.mime).then(function () {
+          return true;
+        }));
+      })(blobs[i]);
+    }
+    return Promise.all(tasks).then(function (results) {
+      var restored = 0;
+      for (var j = 0; j < results.length; j++) {
+        if (results[j]) restored++;
+      }
+      return restored;
+    });
+  }
+
   B.importFile = function (file) {
     if (_importing) return Promise.reject(new Error('Import déjà en cours'));
     _importing = true;
 
     return B.analyzeFile(file).then(function (analysis) {
-      return B.askImportMode(analysis).then(function (mode) {
+      return _validateBackupBlobs(analysis.payload && analysis.payload.blobs).then(function (blobs) {
+        analysis.validatedBlobs = blobs;
+        return B.askImportMode(analysis);
+      }).then(function (mode) {
         if (!mode) {
           _importing = false;
           throw new Error('Import annulé par l\'utilisateur');
@@ -314,23 +420,23 @@
             throw new Error('Import annulé (confirmation replace refusée)');
           }
 
-          try {
-            B.export();
+          return B.exportAsync().then(function () {
             U.toast('Sauvegarde de sécurité créée avant remplacement', 'success', 4000);
-          } catch (e) {
+          }).catch(function (e) {
             VC.logError('28-backup', 'Sauvegarde de sécurité avant replace échouée', e);
             var continueWithoutBackup = U.confirm(
               'Impossible de créer la sauvegarde de sécurité automatique.\n\n' +
               'Remplacer quand même les données ?'
             );
             if (!continueWithoutBackup) {
-              _importing = false;
               throw new Error('Import annulé (backup de sécurité impossible)');
             }
-          }
+          }).then(function () {
+            return _completeImport(analysis, mode);
+          });
         }
 
-        return _executeImport(analysis, mode);
+        return _completeImport(analysis, mode);
       });
     }).then(function (result) {
       _importing = false;
@@ -341,6 +447,15 @@
       throw e;
     });
   };
+
+  function _completeImport(analysis, mode) {
+    var blobs = analysis.validatedBlobs || [];
+    return _restoreBlobs(blobs).then(function (restored) {
+      var stats = _executeImport(analysis, mode);
+      stats.blobsRestored = restored;
+      return stats;
+    });
+  }
 
   function _executeImport(analysis, mode) {
     var collections;

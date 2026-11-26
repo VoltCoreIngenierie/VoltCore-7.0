@@ -42,7 +42,8 @@
       username: 'string|required',
       passwordHash: 'string|required',
       role: 'enum|admin,user,reader',
-      createdAt: 'string'
+      createdAt: 'string',
+      forcePasswordChange: 'bool'
     },
     backup: true
   });
@@ -127,6 +128,15 @@
     return bytes;
   }
 
+  var PBKDF2_ITERATIONS = 600000;
+
+  function _timingSafeEqual(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+    return diff === 0;
+  }
+
   Auth.hashPassword = function (password) {
     return new Promise(function (resolve, reject) {
       if (!global.crypto || !global.crypto.subtle) {
@@ -140,19 +150,59 @@
 
       var salt = global.crypto.getRandomValues(new Uint8Array(16));
       var enc = new TextEncoder().encode(password);
-      var combined = new Uint8Array(salt.length + enc.length);
-      combined.set(salt, 0);
-      combined.set(enc, salt.length);
-
-      global.crypto.subtle.digest('SHA-256', combined).then(function (hashBuffer) {
-        var hashB64 = _bytesToB64(hashBuffer);
-        var saltB64 = _bytesToB64(salt.buffer);
-        resolve(saltB64 + ':' + hashB64);
+      global.crypto.subtle.importKey(
+        'raw',
+        enc,
+        { name: 'PBKDF2' },
+        false,
+        ['deriveBits']
+      ).then(function (key) {
+        return global.crypto.subtle.deriveBits({
+          name: 'PBKDF2',
+          salt: salt,
+          iterations: PBKDF2_ITERATIONS,
+          hash: 'SHA-256'
+        }, key, 256);
+      }).then(function (hashBuffer) {
+        resolve('pbkdf2:' + PBKDF2_ITERATIONS + ':' +
+          _bytesToB64(salt.buffer) + ':' + _bytesToB64(hashBuffer));
       }).catch(function (e) {
         VC.logError('05-auth', 'hashPassword digest échoué', e);
         reject(e);
       });
     });
+  };
+
+  function _verifyLegacySha256(password, stored) {
+    return new Promise(function (resolve) {
+      var parts = stored.split(':');
+      if (parts.length !== 2) {
+        resolve(false);
+        return;
+      }
+      try {
+        var salt = _b64ToBytes(parts[0]);
+        var expected = _b64ToBytes(parts[1]);
+        var enc = new TextEncoder().encode(password || '');
+        var combined = new Uint8Array(salt.length + enc.length);
+        combined.set(salt, 0);
+        combined.set(enc, salt.length);
+        global.crypto.subtle.digest('SHA-256', combined).then(function (hashBuffer) {
+          resolve(_timingSafeEqual(new Uint8Array(hashBuffer), expected));
+        }).catch(function (e) {
+          VC.logError('05-auth', 'verifyPassword legacy digest échoué', e);
+          resolve(false);
+        });
+      } catch (e) {
+        VC.logError('05-auth', 'verifyPassword legacy parse échoué', e);
+        resolve(false);
+      }
+    });
+  }
+
+  Auth.isLegacyPasswordHash = function (stored) {
+    return typeof stored === 'string' &&
+      stored.indexOf('pbkdf2:') !== 0;
   };
 
   Auth.verifyPassword = function (password, stored) {
@@ -162,31 +212,40 @@
         return;
       }
 
-      var parts = stored.split(':');
-      if (parts.length !== 2) {
-        resolve(false);
+      if (Auth.isLegacyPasswordHash(stored)) {
+        _verifyLegacySha256(password, stored).then(resolve);
         return;
       }
 
+      var parts = stored.split(':');
+      if (parts.length !== 4 || parts[0] !== 'pbkdf2') {
+        resolve(false);
+        return;
+      }
       try {
-        var salt = _b64ToBytes(parts[0]);
-        var expected = _b64ToBytes(parts[1]);
+        var iterations = parseInt(parts[1], 10);
+        if (!isFinite(iterations) || iterations < 100000) {
+          resolve(false);
+          return;
+        }
+        var salt = _b64ToBytes(parts[2]);
+        var expected = _b64ToBytes(parts[3]);
         var enc = new TextEncoder().encode(password || '');
-        var combined = new Uint8Array(salt.length + enc.length);
-        combined.set(salt, 0);
-        combined.set(enc, salt.length);
-
-        global.crypto.subtle.digest('SHA-256', combined).then(function (hashBuffer) {
-          var actual = new Uint8Array(hashBuffer);
-          if (actual.length !== expected.length) {
-            resolve(false);
-            return;
-          }
-          var diff = 0;
-          for (var i = 0; i < actual.length; i++) {
-            diff |= actual[i] ^ expected[i];
-          }
-          resolve(diff === 0);
+        global.crypto.subtle.importKey(
+          'raw',
+          enc,
+          { name: 'PBKDF2' },
+          false,
+          ['deriveBits']
+        ).then(function (key) {
+          return global.crypto.subtle.deriveBits({
+            name: 'PBKDF2',
+            salt: salt,
+            iterations: iterations,
+            hash: 'SHA-256'
+          }, key, 256);
+        }).then(function (hashBuffer) {
+          resolve(_timingSafeEqual(new Uint8Array(hashBuffer), expected));
         }).catch(function (e) {
           VC.logError('05-auth', 'verifyPassword digest échoué', e);
           resolve(false);
@@ -229,8 +288,8 @@
         reject(new Error('Nom invalide (2-32 caractères : a-z, 0-9, _, -)'));
         return;
       }
-      if (!password || password.length < 4) {
-        reject(new Error('Mot de passe trop court (4 caractères min)'));
+      if (!password || password.length < 10) {
+        reject(new Error('Mot de passe trop court (10 caractères min)'));
         return;
       }
       if (Auth.getUser(uname)) {
@@ -243,7 +302,8 @@
           username: uname,
           passwordHash: hash,
           role: role || 'admin',
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          forcePasswordChange: false
         });
         if (!user) {
           reject(new Error('Sauvegarde utilisateur échouée'));
@@ -256,8 +316,8 @@
 
   Auth.updateUserPassword = function (username, newPassword) {
     return new Promise(function (resolve, reject) {
-      if (!newPassword || newPassword.length < 4) {
-        reject(new Error('Mot de passe trop court'));
+      if (!newPassword || newPassword.length < 10) {
+        reject(new Error('Mot de passe trop court (10 caractères min)'));
         return;
       }
       var user = Auth.getUser(username);
@@ -268,6 +328,7 @@
 
       Auth.hashPassword(newPassword).then(function (hash) {
         user.passwordHash = hash;
+        user.forcePasswordChange = false;
         var saved = S.save('users', user);
         if (!saved) {
           reject(new Error('Sauvegarde échouée'));
@@ -372,8 +433,20 @@
   };
 
   Auth._bootstrapDefaultUser = function () {
-    Auth.createUser('admin', 'admin', 'admin').then(function () {
-      U.toast('Compte par défaut : admin / admin — Change le mot de passe !', 'warning', 6000);
+    var random = new Uint8Array(18);
+    global.crypto.getRandomValues(random);
+    var tempPassword = 'Vc-' + _bytesToB64(random).replace(/[^A-Za-z0-9]/g, '').slice(0, 24);
+    Auth.createUser('admin', tempPassword, 'admin').then(function () {
+      var user = Auth.getUser('admin');
+      if (user) {
+        user.forcePasswordChange = true;
+        S.save('users', user);
+      }
+      U.prompt(
+        'Compte administrateur initial créé.\n\nMot de passe temporaire à copier maintenant :\n' +
+        tempPassword + '\n\nTu devras le remplacer à la première connexion.',
+        tempPassword
+      );
       Auth.checkLogin();
     }).catch(function (e) {
       VC.logError('05-auth', 'bootstrap admin échoué', e);
@@ -420,6 +493,22 @@
       Auth.currentUser = user;
       if (errEl) errEl.textContent = '';
       Auth._saveRememberedUser(username);
+
+      if (Auth.isLegacyPasswordHash(user.passwordHash)) {
+        Auth.hashPassword(password).then(function (newHash) {
+          user.passwordHash = newHash;
+          S.save('users', user);
+        }).catch(function (e) {
+          VC.logError('05-auth', 'Migration PBKDF2 échouée', e);
+        });
+      }
+
+      if (user.forcePasswordChange) {
+        U.hide('loginModal');
+        Auth._showForcedPasswordChange();
+        return;
+      }
+
       Auth._showAppAfterLogin();
       U.toast('Bienvenue ' + user.username + ' !', 'success');
     }).catch(function (e) {
@@ -442,6 +531,60 @@
     }
 
     Auth.startInactivityTimer();
+  };
+
+  Auth._showForcedPasswordChange = function () {
+    if (!document.getElementById('forcedPasswordChangeModal')) {
+      var modal = document.createElement('div');
+      modal.id = 'forcedPasswordChangeModal';
+      modal.className = 'modal';
+      modal.style.display = 'none';
+      modal.innerHTML =
+        '<div class="modal-content">' +
+          '<h2>🔐 Changement du mot de passe requis</h2>' +
+          '<p class="muted">Choisis un nouveau mot de passe de 10 caractères minimum.</p>' +
+          '<div class="form-grid">' +
+            '<label>Nouveau mot de passe<input type="password" id="forcedNewPassword" autocomplete="new-password" class="input"></label>' +
+            '<label>Confirmation<input type="password" id="forcedNewPasswordConfirm" autocomplete="new-password" class="input"></label>' +
+          '</div>' +
+          '<div id="forcedPasswordError" class="form-error"></div>' +
+          '<div class="modal-actions">' +
+            '<button type="button" id="forcedPasswordSubmit" class="btn btn-primary">Changer le mot de passe</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(modal);
+      document.getElementById('forcedPasswordSubmit').addEventListener('click', Auth._submitForcedPasswordChange);
+    }
+
+    U.setVal('forcedNewPassword', '');
+    U.setVal('forcedNewPasswordConfirm', '');
+    U.setText('forcedPasswordError', '');
+    U.showFlex('forcedPasswordChangeModal');
+  };
+
+  Auth._submitForcedPasswordChange = function () {
+    var pwd = U.getVal('forcedNewPassword') || '';
+    var confirm = U.getVal('forcedNewPasswordConfirm') || '';
+    if (pwd.length < 10) {
+      U.setText('forcedPasswordError', 'Mot de passe 10 caractères min.');
+      return;
+    }
+    if (pwd !== confirm) {
+      U.setText('forcedPasswordError', 'Les mots de passe ne correspondent pas.');
+      return;
+    }
+    if (!Auth.currentUser) {
+      U.setText('forcedPasswordError', 'Session expirée.');
+      return;
+    }
+
+    Auth.updateUserPassword(Auth.currentUser.username, pwd).then(function () {
+      U.hide('forcedPasswordChangeModal');
+      Auth._showAppAfterLogin();
+      U.toast('Mot de passe changé', 'success');
+    }).catch(function (e) {
+      U.setText('forcedPasswordError', e.message);
+    });
   };
 
   Auth.logout = function () {
@@ -984,7 +1127,7 @@
     var r = U.getVal('umNewRole') || 'user';
 
     if (!u) { U.setText('umError', 'Nom requis.'); return; }
-    if (!p || p.length < 4) { U.setText('umError', 'Mot de passe 4 caractères min.'); return; }
+    if (!p || p.length < 10) { U.setText('umError', 'Mot de passe 10 caractères min.'); return; }
     if (p !== pc) { U.setText('umError', 'Les mots de passe ne correspondent pas.'); return; }
 
     Auth.createUser(u, p, r).then(function () {
@@ -1001,8 +1144,8 @@
   Auth._umHandleChangePassword = function (username) {
     var pwd = U.prompt('Nouveau mot de passe pour "' + username + '" :\n(min 4 caractères)', '');
     if (pwd === null) return;
-    if (!pwd || pwd.length < 4) {
-      U.toast('Mot de passe trop court.', 'warning');
+    if (!pwd || pwd.length < 10) {
+      U.toast('Mot de passe trop court (10 caractères min).', 'warning');
       return;
     }
     Auth.updateUserPassword(username, pwd).then(function () {
